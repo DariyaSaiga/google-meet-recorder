@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Google Meet Recorder",
+  "version": "0.1.0",
+  "description": "Record Google Meet meetings locally",
+
+  "permissions": [
+    "tabCapture",
+    "activeTab",
+    "offscreen",
+    "downloads",
+    "storage"
+  ],
+
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+
+  "action": {
+    "default_title": "Google Meet Recorder"
+  },
+
+  "options_ui": {
+    "page": "popup.html",
+    "open_in_tab": true
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/cat-idle.png", "assets/cat-recording.png"],
+      "matches": ["https://meet.google.com/*"]
+    }
+  ],
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ]
+    }
+  ]
+}

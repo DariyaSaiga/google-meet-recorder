@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Настройки — Google Meet Recorder</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <img class="settings-cat" src="assets/cat-settings.jpeg" alt="Кот" width="100" height="100">
+      <h1>Google Meet Recorder</h1><p>Настройки записи</p></header>
+    <p class="notice">Настройки применяются к следующей записи. В режиме «Аудио + видео» записывается изображение вкладки Meet.</p>
+    <form id="settings-form">
+      <fieldset id="settings-controls" disabled>
+        <fieldset class="card">
+          <legend>Режим записи</legend>
+          <label><input type="radio" name="recordingMode" value="audio" checked> Только аудио</label>
+          <label><input type="radio" name="recordingMode" value="audio-video"> Аудио + видео</label>
+        </fieldset>
+        <section class="card" aria-labelledby="microphone-heading">
+          <h2 id="microphone-heading">Микрофон</h2>
+          <label class="toggle-row">Записывать мой микрофон <input id="microphone-enabled" name="microphoneEnabled" type="checkbox" role="switch" checked></label>
+        </section>
+        <fieldset class="card">
+          <legend>Сохранение</legend>
+          <label><input type="radio" name="saveMode" value="downloads" checked> Загрузки автоматически</label>
+          <label><input type="radio" name="saveMode" value="ask"> Спрашивать каждый раз</label>
+          <label><input type="radio" name="saveMode" value="selected-folder"> Выбранная папка</label>
+          <button id="choose-folder" type="button">♡ Выбрать папку</button>
+          <p id="folder-status" role="status" aria-live="polite"></p>
+          <button id="restore-folder-access" type="button" hidden>Разрешить доступ</button>
+        </fieldset>
+      </fieldset>
+    </form>
+    <p id="settings-status" role="status" aria-live="polite">Загрузка настроек...</p>
+    <section class="permission">
+      <button id="enable-microphone" type="button">♡ Разрешить микрофон</button>
+      <p id="microphone-status" role="status" aria-live="polite">Разрешение на микрофон ещё не проверено</p>
+    </section>
+  </main>
+</body>
+</html>

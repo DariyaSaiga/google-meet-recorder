@@ -1,0 +1,109 @@
+#gmr-record-button {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  z-index: 2147483647;
+  background: #F48FB1;
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: grab;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+#gmr-record-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+#gmr-record-button:active {
+  transform: translateY(0);
+}
+
+#gmr-record-button:focus-visible {
+  outline: 3px solid #713250;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 4px white, 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+#gmr-permission-hint {
+  position: fixed;
+  right: 24px;
+  bottom: 154px;
+  z-index: 2147483647;
+  max-width: min(260px, calc(100vw - 72px));
+  padding: 10px 12px;
+  border: 1px solid #F48FB1;
+  border-radius: 12px;
+  background: #FFF0F5;
+  color: #713250;
+  font: 14px/1.4 Arial, sans-serif;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.gmr-record-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#gmr-record-button.gmr-record-button--recording {
+  background: #f5b1c8;
+  color: #713250;
+}
+
+#gmr-record-button:disabled {
+  cursor: default;
+  opacity: 0.85;
+  transform: none;
+}
+
+.gmr-recording-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: #d32f45;
+  display: inline-block;
+  animation: gmr-recording-pulse 1.8s ease-in-out infinite;
+}
+
+.gmr-record-label { white-space: nowrap; }
+.gmr-record-timer { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#gmr-record-button [hidden] { display: none; }
+
+@keyframes gmr-recording-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gmr-recording-dot { animation: none; }
+}
+
+.gmr-record-button {
+  touch-action: none;
+  user-select: none;
+}
+
+#gmr-record-button.gmr-dragging {
+  cursor: grabbing;
+  transform: none;
+  transition: none;
+}
+
+.gmr-record-cat {
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  pointer-events: none;
+  user-select: none;
+}

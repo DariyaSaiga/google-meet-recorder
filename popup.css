@@ -1,0 +1,36 @@
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 300px; background: #fff7fb; color: #63354b; font: 14px/1.5 Arial, sans-serif; }
+main { max-width: 440px; margin: auto; padding: 24px; }
+h1 { margin: 0; font-size: 21px; line-height: 1.3; }
+header p { margin: 5px 0 18px; }
+.notice { font-size: 12px; color: #785b6a; margin-bottom: 22px; }
+fieldset { min-width: 0; }
+#settings-controls { padding: 0; border: 0; margin: 0; }
+.card { margin: 0 0 18px; padding: 14px 16px; border: 1px solid #f5d9e5; border-radius: 16px; background: #fff; box-shadow: 0 4px 14px #7132500a; }
+legend, h2 { padding: 0 5px; font-size: 14px; font-weight: 600; }
+h2 { margin: 0 0 10px; padding: 0; }
+label { display: flex; align-items: center; gap: 9px; padding: 6px 0; cursor: pointer; }
+input { accent-color: #b74772; margin: 0; flex-shrink: 0; }
+input[type="radio"] { width: 16px; height: 16px; }
+.toggle-row { justify-content: space-between; }
+input[role="switch"] { appearance: none; width: 38px; height: 22px; border: 1px solid #bfa4b0; border-radius: 99px; background: #e4d8df; cursor: pointer; transition: background 150ms; }
+input[role="switch"]::before { content: ""; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: white; box-shadow: 0 1px 3px #0003; transition: transform 150ms; }
+input[role="switch"]:checked { background: #b74772; border-color: #b74772; }
+input[role="switch"]:checked::before { transform: translateX(16px); }
+.unavailable { color: #897481; cursor: not-allowed; }
+input:focus-visible, button:focus-visible { outline: 3px solid #713250; outline-offset: 4px; }
+#settings-status { min-height: 21px; margin: 0 0 14px; }
+.permission { border-top: 1px solid #f5d9e5; padding-top: 16px; }
+button { width: 100%; padding: 10px 16px; border: 0; border-radius: 999px; background: #f9c6d9; color: #63354b; font: inherit; font-weight: 600; cursor: pointer; }
+button:hover:not(:disabled) { background: #f4afc8; }
+button:disabled { opacity: .65; cursor: wait; }
+#microphone-status { margin: 10px 0 0; font-size: 12px; }
+
+.settings-cat {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 24px;
+  display: block;
+  margin: 0 auto 16px;
+}
