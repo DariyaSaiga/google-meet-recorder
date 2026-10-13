@@ -2,9 +2,10 @@
   "use strict";
 
   console.log("[GMR][CONTENT] content script loaded");
-  console.log("[GMR][CONTENT] URL:", window.location.href);
-
-  const platform = window.GMRPlatforms?.googleMeet;
+  const platform = [window.GMRPlatforms?.googleMeet, window.GMRPlatforms?.teams]
+    .find((adapter) => adapter?.matchesLocation());
+  console.log("[GMR][CONTENT] URL:", platform?.id === "teams" ? window.location.hostname : window.location.href);
+  let lastTeamsDetectionSnapshot = null;
 
   let lastUrl = window.location.href;
   let previousMeetingState = false;
@@ -262,6 +263,10 @@
   }
 
   function requestStartRecording(button) {
+    if (platform?.id === "teams") {
+      console.log("[GMR][CONTENT][TEAMS] recording not enabled in detection-only stage");
+      return;
+    }
     if (startRequestPending) {
       console.warn("[GMR][CONTENT] start request already pending");
       return;
@@ -476,11 +481,18 @@
     try {
       const currentUrl = window.location.href;
       if (currentUrl !== lastUrl) {
-        console.log("[GMR][CONTENT] URL changed:", currentUrl);
+        console.log("[GMR][CONTENT] URL changed:", platform?.id === "teams" ? window.location.hostname : currentUrl);
         lastUrl = currentUrl;
       }
 
       const signals = platform.getMeetingState();
+      if (platform.id === "teams") {
+        const snapshot = JSON.stringify(signals);
+        if (snapshot !== lastTeamsDetectionSnapshot) {
+          console.log("[GMR][CONTENT][TEAMS] detection snapshot", signals);
+          lastTeamsDetectionSnapshot = snapshot;
+        }
+      }
       const insideMeeting = platform.isInsideMeeting(signals);
       if (insideMeeting !== previousMeetingState) {
         console.log(insideMeeting

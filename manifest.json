@@ -45,6 +45,11 @@
       "css": [
         "content.css"
       ]
+    },
+    {
+      "matches": ["https://teams.live.com/*"],
+      "js": ["platforms/teams.js", "content.js"],
+      "css": ["content.css"]
     }
   ]
 }
