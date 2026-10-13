@@ -10,27 +10,6 @@ let startOperation = null;
 let stopOperation = null;
 console.log("[GMR][SW] initial capture state:", captureState);
 
-// The toolbar click grants invocation; content resumes a pending START itself.
-chrome.action.onClicked.addListener(async (tab) => {
-  try {
-    if (!Number.isInteger(tab?.id) || tab.id < 0) {
-      console.warn("[GMR][SW] action clicked without valid tab id");
-      return;
-    }
-    if (!tab.url?.startsWith("https://meet.google.com/")) {
-      console.warn("[GMR][SW] action clicked outside Google Meet");
-      return;
-    }
-
-    console.log("[GMR][SW] extension invoked for Meet tab:", tab.id);
-    console.log("[GMR][SW] notifying content script about invocation");
-    await chrome.tabs.sendMessage(tab.id, { type: "EXTENSION_INVOKED" });
-    console.log("[GMR][SW] content script notified");
-  } catch (error) {
-    console.error("[GMR][SW] failed to notify content script:", error);
-  }
-});
-
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
   microphoneEnabled: true,

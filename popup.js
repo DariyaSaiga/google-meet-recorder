@@ -2,6 +2,33 @@
 
 console.log("[GMR][POPUP] settings page loaded");
 
+async function notifyExtensionInvocation() {
+  console.log("[GMR][POPUP] extension popup opened");
+  let tab;
+  try {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  } catch {
+    console.warn("[GMR][POPUP] active tab unavailable");
+    return;
+  }
+  if (!Number.isInteger(tab?.id) || tab.id < 0 ||
+      !tab.url?.startsWith("https://meet.google.com/")) {
+    console.log("[GMR][POPUP] active tab is not a supported meeting page");
+    return;
+  }
+  console.log("[GMR][POPUP] active tab: Google Meet");
+  console.log("[GMR][POPUP] notifying content about extension invocation");
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "EXTENSION_INVOKED" });
+    console.log("[GMR][POPUP] content notified about extension invocation");
+  } catch {
+    console.warn("[GMR][POPUP] content script not available on active tab");
+  }
+}
+
+// Keep the invocation handoff independent of settings initialization.
+notifyExtensionInvocation();
+
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
   microphoneEnabled: true,

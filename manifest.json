@@ -17,7 +17,8 @@
   },
 
   "action": {
-    "default_title": "Google Meet Recorder"
+    "default_title": "Google Meet Recorder",
+    "default_popup": "popup.html"
   },
 
   "options_ui": {
