@@ -50,6 +50,15 @@
       "matches": ["https://teams.live.com/*"],
       "js": ["platforms/teams.js", "content.js"],
       "css": ["content.css"]
+    },
+    {
+      "matches": [
+        "https://app.zoom.us/wc",
+        "https://app.zoom.us/wc/*"
+      ],
+      "js": ["platforms/zoom.js", "content.js"],
+      "css": ["content.css"],
+      "all_frames": true
     }
   ]
 }

@@ -2,10 +2,11 @@
   "use strict";
 
   console.log("[GMR][CONTENT] content script loaded");
-  const platform = [window.GMRPlatforms?.googleMeet, window.GMRPlatforms?.teams]
+  const platform = [window.GMRPlatforms?.googleMeet, window.GMRPlatforms?.teams, window.GMRPlatforms?.zoom]
     .find((adapter) => adapter?.matchesLocation());
-  console.log("[GMR][CONTENT] URL:", platform?.id === "teams" ? window.location.hostname : window.location.href);
+  console.log("[GMR][CONTENT] URL:", ["teams", "zoom"].includes(platform?.id) ? window.location.hostname : window.location.href);
   let lastTeamsDetectionSnapshot = null;
+  let lastZoomDetectionSnapshot = null;
 
   let lastUrl = window.location.href;
   let previousMeetingState = false;
@@ -263,6 +264,10 @@
   }
 
   function requestStartRecording(button) {
+    if (platform?.id === "zoom") {
+      console.log("[GMR][CONTENT][ZOOM] recording not enabled in detection-only stage");
+      return;
+    }
     if (startRequestPending) {
       console.warn("[GMR][CONTENT] start request already pending");
       return;
@@ -480,7 +485,7 @@
     try {
       const currentUrl = window.location.href;
       if (currentUrl !== lastUrl) {
-        console.log("[GMR][CONTENT] URL changed:", platform?.id === "teams" ? window.location.hostname : currentUrl);
+        console.log("[GMR][CONTENT] URL changed:", ["teams", "zoom"].includes(platform?.id) ? window.location.hostname : currentUrl);
         lastUrl = currentUrl;
       }
 
@@ -490,6 +495,13 @@
         if (snapshot !== lastTeamsDetectionSnapshot) {
           console.log("[GMR][CONTENT][TEAMS] detection snapshot", signals);
           lastTeamsDetectionSnapshot = snapshot;
+        }
+      }
+      if (platform.id === "zoom") {
+        const snapshot = JSON.stringify(signals);
+        if (snapshot !== lastZoomDetectionSnapshot) {
+          console.log("[GMR][CONTENT][ZOOM] detection snapshot", signals);
+          lastZoomDetectionSnapshot = snapshot;
         }
       }
       const insideMeeting = platform.isInsideMeeting(signals);
@@ -522,6 +534,8 @@
   function initialize() {
     try {
       if (!platform?.matchesLocation()) return;
+      // Confirmed Zoom controls live in the meeting iframe. Never create top UI.
+      if (platform.id === "zoom" && window === window.top) return;
       if (!document.body) {
         window.setTimeout(initialize, 50);
         return;
