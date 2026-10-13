@@ -313,7 +313,7 @@ async function checkMicrophonePermission() {
     if (userRequestStarted) return;
     if (permission.state === "granted") {
       microphoneStatus.textContent = "Доступ к микрофону разрешён";
-      enableButton.textContent = "♡ Микрофон готов";
+      enableButton.textContent = "Микрофон готов";
     } else if (permission.state === "prompt") {
       microphoneStatus.textContent = "Требуется разрешение на использование микрофона";
     } else if (permission.state === "denied") {

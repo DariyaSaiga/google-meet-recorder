@@ -162,9 +162,7 @@
       saved: "Сохранено!", permission: "Разрешить запись"
     };
     const capturing = state === "capturing";
-    const cat = button.querySelector(".gmr-record-cat");
-    const catUrl = chrome.runtime.getURL(capturing ? "assets/cat-recording.png" : "assets/cat-idle.png");
-    if (cat.src !== catUrl) cat.src = catUrl;
+    button.classList.toggle("gmr-record-button--idle", state === "idle");
     button.querySelector(".gmr-record-label").textContent = labels[state];
     button.querySelector(".gmr-recording-dot").hidden = !capturing;
     button.querySelector(".gmr-record-timer").hidden = !capturing;
@@ -442,11 +440,6 @@
     const button = document.createElement("button");
     button.id = "gmr-record-button";
     button.className = "gmr-record-button";
-    const cat = document.createElement("img");
-    cat.className = "gmr-record-cat";
-    cat.alt = "";
-    cat.draggable = false;
-    button.appendChild(cat);
     for (const className of ["gmr-recording-dot", "gmr-record-label", "gmr-record-timer"]) {
       const span = document.createElement("span");
       span.className = className;

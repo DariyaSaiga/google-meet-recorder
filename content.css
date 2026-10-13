@@ -3,33 +3,39 @@
   right: 24px;
   bottom: 96px;
   z-index: 2147483647;
-  background: #F48FB1;
-  color: white;
-  border: none;
-  border-radius: 999px;
-  padding: 12px 18px;
-  font-family: Arial, sans-serif;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 120px;
+  min-height: 42px;
+  justify-content: center;
+  background: #FFFFFF;
+  color: #0F2E2A;
+  border: 1px solid #EAEAE6;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   cursor: grab;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  transition: transform 150ms ease, box-shadow 150ms ease;
+  box-shadow: 0 2px 8px rgba(15, 46, 42, 0.10);
+  transition: background-color 150ms ease;
 }
 
-#gmr-record-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+#gmr-record-button.gmr-record-button--idle {
+  background: #49A598;
+  color: #FFFFFF;
+  border: none;
 }
 
-#gmr-record-button:active {
-  transform: translateY(0);
+#gmr-record-button.gmr-record-button--idle:hover:not(:disabled) {
+  background: #2F6F66;
 }
 
 #gmr-record-button:focus-visible {
-  outline: 3px solid #713250;
+  outline: 3px solid #2F6F66;
   outline-offset: 4px;
-  box-shadow: 0 0 0 4px white, 0 6px 20px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 0 0 4px #FFFFFF;
 }
 
 #gmr-permission-hint {
@@ -39,12 +45,12 @@
   z-index: 2147483647;
   max-width: min(260px, calc(100vw - 72px));
   padding: 10px 12px;
-  border: 1px solid #F48FB1;
+  border: 1px solid #EAEAE6;
   border-radius: 12px;
-  background: #FFF0F5;
-  color: #713250;
-  font: 14px/1.4 Arial, sans-serif;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  background: #FFFFFF;
+  color: #0F2E2A;
+  font: 14px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 2px 8px rgba(15, 46, 42, 0.10);
 }
 
 .gmr-record-button {
@@ -54,8 +60,8 @@
 }
 
 #gmr-record-button.gmr-record-button--recording {
-  background: #f5b1c8;
-  color: #713250;
+  background: #FFFFFF;
+  color: #0F2E2A;
 }
 
 #gmr-record-button:disabled {
@@ -75,7 +81,7 @@
 }
 
 .gmr-record-label { white-space: nowrap; }
-.gmr-record-timer { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gmr-record-timer { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #gmr-record-button [hidden] { display: none; }
 
 @keyframes gmr-recording-pulse {
@@ -96,14 +102,4 @@
   cursor: grabbing;
   transform: none;
   transition: none;
-}
-
-.gmr-record-cat {
-  width: 26px;
-  height: 26px;
-  object-fit: cover;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  pointer-events: none;
-  user-select: none;
 }
