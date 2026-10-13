@@ -12,7 +12,8 @@ async function notifyExtensionInvocation() {
     return;
   }
   const platform = tab?.url?.startsWith("https://meet.google.com/") ? "meet"
-    : tab?.url?.startsWith("https://teams.live.com/") ? "teams" : null;
+    : tab?.url?.startsWith("https://teams.live.com/") ? "teams"
+    : /^https:\/\/app\.zoom\.us\/wc(?:\/|[?#]|$)/.test(tab?.url || "") ? "zoom" : null;
   if (!Number.isInteger(tab?.id) || tab.id < 0 || !platform) {
     console.log("[GMR][POPUP] active tab is not a supported meeting page");
     return;

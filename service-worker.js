@@ -153,9 +153,13 @@ async function performStartRecording(sender, message) {
 
   console.log("[GMR][SW] sender tab id:", tabId);
   const tabUrl = sender?.tab?.url;
-  const identity = getRecordingIdentity(tabUrl);
-  // The sender URL is authoritative; content metadata must agree with it.
-  if (!identity || (message?.platform && message.platform !== identity.platform) ||
+  const tabIdentity = getRecordingIdentity(tabUrl);
+  // Zoom controls run in a meeting iframe; capture still targets sender.tab.id.
+  // Retain its URL in the existing recording context for filenames/restoration.
+  const recordingUrl = tabIdentity?.platform === "zoom" ? sender.url : tabUrl;
+  const identity = getRecordingIdentity(recordingUrl);
+  if (!identity || identity.platform !== tabIdentity?.platform ||
+      (message?.platform && message.platform !== identity.platform) ||
       (message?.meetingId && message.meetingId !== identity.meetingId)) {
     return { ok: false, stage: "platform", message: "Unsupported or mismatched recording platform" };
   }
@@ -163,7 +167,7 @@ async function performStartRecording(sender, message) {
 
   captureState = "starting";
   activeCaptureTabId = tabId;
-  activeCaptureTabUrl = sender?.tab?.url || null;
+  activeCaptureTabUrl = recordingUrl || null;
   console.log("[GMR][SW] capture state: idle -> starting");
   try {
     const settings = await getRecordingSettings();
@@ -179,7 +183,7 @@ async function performStartRecording(sender, message) {
       });
       captureState = "capturing";
       activeCaptureTabId = tabId;
-      activeCaptureTabUrl = sender?.tab?.url || null;
+      activeCaptureTabUrl = recordingUrl || null;
       return { ok: false, stage: "capture-state", state: "capturing", message: "Tab capture already active" };
     }
     console.log("[GMR][SW] requesting tab capture stream ID for tab:", tabId);
@@ -213,7 +217,7 @@ async function performStartRecording(sender, message) {
         console.log("[GMR][SW] recorder mimeType:", response.mimeType);
         captureState = "capturing";
         activeCaptureTabId = tabId;
-        activeCaptureTabUrl = sender?.tab?.url || null;
+        activeCaptureTabUrl = recordingUrl || null;
         console.log("[GMR][SW] capture state: starting -> capturing");
         return { ok: true, stage: "recording", state: "capturing", message: "Recording started" };
       }
@@ -225,7 +229,7 @@ async function performStartRecording(sender, message) {
         console.log("[GMR][SW] AudioContext state:", response.audioContextState);
         captureState = "capturing";
         activeCaptureTabId = tabId;
-        activeCaptureTabUrl = sender?.tab?.url || null;
+        activeCaptureTabUrl = recordingUrl || null;
         console.log("[GMR][SW] capture state: starting -> capturing");
         return { ok: true, stage: "audio-mix-ready", state: "capturing", message: "Audio sources ready" };
       }
@@ -235,7 +239,7 @@ async function performStartRecording(sender, message) {
         console.log("[GMR][SW] tab audio tracks:", response.audioTrackCount);
         captureState = "capturing";
         activeCaptureTabId = tabId;
-        activeCaptureTabUrl = sender?.tab?.url || null;
+        activeCaptureTabUrl = recordingUrl || null;
         console.log("[GMR][SW] capture state: starting -> capturing");
         return { ok: true, stage: "tab-media-ready", state: "capturing", message: "Tab audio MediaStream ready" };
       }
@@ -247,7 +251,7 @@ async function performStartRecording(sender, message) {
         console.log("[GMR][SW] microphone audio tracks:", response.micAudioTrackCount);
         captureState = "capturing";
         activeCaptureTabId = tabId;
-        activeCaptureTabUrl = sender?.tab?.url || null;
+        activeCaptureTabUrl = recordingUrl || null;
         console.log("[GMR][SW] capture state: starting -> capturing");
         return { ok: true, stage: "sources-ready", state: "capturing", message: "Tab audio and microphone ready" };
       }
@@ -296,6 +300,10 @@ function getRecordingIdentity(tabUrl) {
     if (url.hostname === "meet.google.com") {
       const match = url.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i);
       return { platform: "meet", label: "Meet", meetingId: match?.[1] || "meeting" };
+    }
+    if (url.hostname === "app.zoom.us") {
+      const match = url.pathname.match(/^\/wc\/(\d+)\/(?:join|start)\/?$/);
+      return { platform: "zoom", label: "Zoom", meetingId: match?.[1] || "meeting" };
     }
     if (url.hostname === "teams.live.com") {
       const match = url.pathname.match(/^\/meet\/(\d+)\/?$/);

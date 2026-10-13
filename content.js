@@ -264,10 +264,6 @@
   }
 
   function requestStartRecording(button) {
-    if (platform?.id === "zoom") {
-      console.log("[GMR][CONTENT][ZOOM] recording not enabled in detection-only stage");
-      return;
-    }
     if (startRequestPending) {
       console.warn("[GMR][CONTENT] start request already pending");
       return;
