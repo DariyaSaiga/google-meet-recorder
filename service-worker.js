@@ -71,7 +71,7 @@ async function ensureOffscreenDocument() {
       await chrome.offscreen.createDocument({
         url: "offscreen.html",
         reasons: ["USER_MEDIA"],
-        justification: "Capture Google Meet tab media for local recording"
+        justification: "Capture meeting tab media for local recording"
       });
       console.log("[GMR][SW] offscreen document created");
     } catch (error) {
@@ -93,7 +93,7 @@ async function ensureOffscreenDocument() {
   }
 }
 
-async function handleStartRecording(sender) {
+async function handleStartRecording(sender, message) {
   if (stopOperation) return { ok: false, stage: "capture-state", state: "stopping", message: "Capture is stopping" };
   // A real in-flight request must not be mistaken for stale starting state.
   if (startOperation) {
@@ -122,7 +122,7 @@ async function handleStartRecording(sender) {
       activeCaptureTabId = status.tabId ?? null;
       activeCaptureTabUrl = status.tabUrl || null;
     }
-    return await performStartRecording(sender);
+    return await performStartRecording(sender, message);
   })();
   try {
     return await startOperation;
@@ -131,7 +131,7 @@ async function handleStartRecording(sender) {
   }
 }
 
-async function performStartRecording(sender) {
+async function performStartRecording(sender, message) {
   console.log("[GMR][SW] START_RECORDING received");
   const tabId = sender?.tab?.id;
   if (captureState === "starting") {
@@ -153,9 +153,13 @@ async function performStartRecording(sender) {
 
   console.log("[GMR][SW] sender tab id:", tabId);
   const tabUrl = sender?.tab?.url;
-  if (tabUrl) {
-    console.log("[GMR][SW] sender tab URL:", tabUrl);
+  const identity = getRecordingIdentity(tabUrl);
+  // The sender URL is authoritative; content metadata must agree with it.
+  if (!identity || (message?.platform && message.platform !== identity.platform) ||
+      (message?.meetingId && message.meetingId !== identity.meetingId)) {
+    return { ok: false, stage: "platform", message: "Unsupported or mismatched recording platform" };
   }
+  console.log("[GMR][SW] recording platform:", identity.platform);
 
   captureState = "starting";
   activeCaptureTabId = tabId;
@@ -285,20 +289,32 @@ async function performStartRecording(sender) {
   }
 }
 
-function buildRecordingFilename(tabUrl) {
-  let meetingCode = "meeting";
+function getRecordingIdentity(tabUrl) {
   try {
     const url = new URL(tabUrl);
-    const match = url.hostname === "meet.google.com"
-      ? url.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i) : null;
-    if (match) meetingCode = match[1];
+    if (url.protocol !== "https:") return null;
+    if (url.hostname === "meet.google.com") {
+      const match = url.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i);
+      return { platform: "meet", label: "Meet", meetingId: match?.[1] || "meeting" };
+    }
+    if (url.hostname === "teams.live.com") {
+      const match = url.pathname.match(/^\/meet\/(\d+)\/?$/);
+      return { platform: "teams", label: "Teams", meetingId: match?.[1] || "meeting" };
+    }
   } catch {
-    // Missing or invalid URLs use the generic meeting name.
+    // Invalid URLs are not supported recording pages.
   }
+  return null;
+}
+
+function buildRecordingFilename(tabUrl) {
+  const identity = getRecordingIdentity(tabUrl);
+  const label = identity?.label || "Meet";
+  const meetingCode = identity?.meetingId || "meeting";
   const now = new Date();
   const pad = (value) => String(value).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
-  return `Meet_${meetingCode}_${stamp}.webm`.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
+  return `${label}_${meetingCode}_${stamp}.webm`.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
 }
 
 async function getOffscreenCaptureStatus() {
@@ -456,7 +472,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     try {
       await restoreCaptureState();
       if (tabId !== activeCaptureTabId || !["starting", "capturing", "stopping"].includes(captureState)) return;
-      console.log("[GMR][SW] active Meet tab closed during recording");
+      console.log("[GMR][SW] active recording tab closed during recording");
       const result = await stopAndSaveRecording("tab-closed");
       if (!result.ok) throw new Error(`${result.stage}: ${result.message}`);
       console.log("[GMR][SW] recording saved after tab close");
@@ -469,7 +485,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 function getMeetingCodeFromUrl(url) {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || parsed.hostname !== "meet.google.com") return null;
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.hostname === "teams.live.com") {
+      return parsed.pathname.match(/^\/meet\/(\d+)\/?$/)?.[1] || null;
+    }
+    if (parsed.hostname !== "meet.google.com") return null;
     const path = parsed.pathname.replace(/^\/+|\/+$/g, "");
     return /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(path) ? path.toLowerCase() : null;
   } catch {
@@ -485,10 +505,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (tabId !== activeCaptureTabId || !["starting", "capturing", "stopping"].includes(captureState)) return;
       const previousCode = getMeetingCodeFromUrl(activeCaptureTabUrl);
       const newCode = getMeetingCodeFromUrl(changeInfo.url);
-      const newUrl = new URL(changeInfo.url);
+      const previousPlatform = getRecordingIdentity(activeCaptureTabUrl)?.platform;
+      const nextPlatform = getRecordingIdentity(changeInfo.url)?.platform;
       let reason;
-      if (newUrl.protocol !== "https:" || newUrl.hostname !== "meet.google.com") {
-        console.log("[GMR][SW] active recording tab navigated away from Meet");
+      if (!nextPlatform || nextPlatform !== previousPlatform) {
+        console.log("[GMR][SW] active recording tab navigated away from its platform");
         reason = "navigation";
       } else if (previousCode && newCode && previousCode !== newCode) {
         console.log("[GMR][SW] active recording tab changed meeting code", { previousCode, newCode });
@@ -542,7 +563,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    handleStartRecording(sender)
+    handleStartRecording(sender, message)
       .then((response) => respondSafely(sendResponse, response))
       .catch((error) => {
         console.error("[GMR][SW] START_RECORDING failed", error);

@@ -263,10 +263,6 @@
   }
 
   function requestStartRecording(button) {
-    if (platform?.id === "teams") {
-      console.log("[GMR][CONTENT][TEAMS] recording not enabled in detection-only stage");
-      return;
-    }
     if (startRequestPending) {
       console.warn("[GMR][CONTENT] start request already pending");
       return;
@@ -279,7 +275,10 @@
     const requestUiVersion = meetingUiVersion;
     try {
       startRequestPending = true;
-      chrome.runtime.sendMessage({ type: "START_RECORDING" }, (response) => {
+      chrome.runtime.sendMessage({
+        type: "START_RECORDING", platform: platform.id,
+        meetingId: platform.getMeetingId() || "meeting"
+      }, (response) => {
         try {
           const lastError = chrome.runtime.lastError;
           if (requestUiVersion !== meetingUiVersion) return;

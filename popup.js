@@ -11,12 +11,13 @@ async function notifyExtensionInvocation() {
     console.warn("[GMR][POPUP] active tab unavailable");
     return;
   }
-  if (!Number.isInteger(tab?.id) || tab.id < 0 ||
-      !tab.url?.startsWith("https://meet.google.com/")) {
+  const platform = tab?.url?.startsWith("https://meet.google.com/") ? "meet"
+    : tab?.url?.startsWith("https://teams.live.com/") ? "teams" : null;
+  if (!Number.isInteger(tab?.id) || tab.id < 0 || !platform) {
     console.log("[GMR][POPUP] active tab is not a supported meeting page");
     return;
   }
-  console.log("[GMR][POPUP] active tab: Google Meet");
+  console.log("[GMR][POPUP] supported meeting tab invoked", { platform });
   console.log("[GMR][POPUP] notifying content about extension invocation");
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "EXTENSION_INVOKED" });

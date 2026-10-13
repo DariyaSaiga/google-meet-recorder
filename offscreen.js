@@ -535,7 +535,7 @@ async function getSelectedDirectoryHandle() {
 let folderWriteOperation = null;
 async function saveToSelectedFolder(blobUrl, filename) {
   if (!pendingRecording || blobUrl !== pendingRecording.blobUrl ||
-      typeof filename !== "string" || !/^Meet_[^/\\]+\.webm$/.test(filename)) {
+      typeof filename !== "string" || !/^(?:Meet|Teams)_[^/\\]+\.webm$/.test(filename)) {
     return { ok: false, stage: "folder-validation", message: "Invalid pending recording" };
   }
   if (pendingRecording.folderSaved) return { ok: true, stage: "saved-selected-folder" };
