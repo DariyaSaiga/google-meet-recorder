@@ -7,6 +7,8 @@
   console.log("[GMR][CONTENT] URL:", ["teams", "zoom"].includes(platform?.id) ? window.location.hostname : window.location.href);
   let lastTeamsDetectionSnapshot = null;
   let lastZoomDetectionSnapshot = null;
+  let zoomLifecyclePort = null;
+  let zoomFrameExitSent = false;
 
   let lastUrl = window.location.href;
   let previousMeetingState = false;
@@ -537,6 +539,14 @@
         return;
       }
       if (observer) return;
+      if (platform.id === "zoom") {
+        zoomLifecyclePort = chrome.runtime.connect({ name: "zoom-meeting-lifecycle" });
+        zoomLifecyclePort.onDisconnect.addListener(() => {
+          // Worker restarts must not themselves stop a live recording.
+          void chrome.runtime.lastError;
+          zoomLifecyclePort = null;
+        });
+      }
 
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message?.type !== "EXTENSION_INVOKED") return false;
@@ -591,6 +601,14 @@
   window.addEventListener("resize", constrainRecordButtonPosition);
 
   window.addEventListener("pagehide", () => {
+    if (platform?.id === "zoom" && captureState === "capturing" && !zoomFrameExitSent) {
+      zoomFrameExitSent = true;
+      console.log("[GMR][CONTENT][ZOOM] meeting frame leaving while recording");
+      // Fire and forget: saving belongs to the worker, not this dying document.
+      try {
+        chrome.runtime.sendMessage({ type: "ZOOM_MEETING_FRAME_LEFT" }).catch(() => {});
+      } catch { /* Navigation can close the extension channel immediately. */ }
+    }
     finishRecordButtonDrag(document.getElementById("gmr-record-button"), true);
     dragMoved = false;
     stopRecordingTimer();

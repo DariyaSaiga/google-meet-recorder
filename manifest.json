@@ -9,7 +9,8 @@
     "activeTab",
     "offscreen",
     "downloads",
-    "storage"
+    "storage",
+    "webNavigation"
   ],
 
   "background": {

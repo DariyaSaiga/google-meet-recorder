@@ -21,6 +21,7 @@ let stopRecordingPending = false;
 let pendingRecording = null;
 let recordingTabId = null;
 let recordingTabUrl = null;
+let recordingFrame = null;
 
 function createMediaRecorder(settings) {
   if (!finalRecordingStream?.getAudioTracks().some((track) => track.readyState === "live")) {
@@ -620,7 +621,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       recorderState: mediaRecorder?.state || "none",
       hasPendingRecording: Boolean(pendingRecording),
       active: Boolean(pendingRecording || hasLiveTracks(tabStream) || mediaRecorder?.state === "recording"),
-      tabId: recordingTabId, tabUrl: recordingTabUrl
+      tabId: recordingTabId, tabUrl: recordingTabUrl, recordingFrame
     });
     return false;
   }
@@ -632,6 +633,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         recordingSettings = null;
         recordingTabId = null;
         recordingTabUrl = null;
+        recordingFrame = null;
         console.log("[GMR][OFFSCREEN] Blob URL revoked");
       }
       respondSafely(sendResponse, { ok: true });
@@ -673,6 +675,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!mediaRecorder && !pendingRecording && !hasActiveTabStream() && !prepareCapturePending) {
     recordingTabId = message.tabId ?? null;
     recordingTabUrl = message.tabUrl || null;
+    recordingFrame = message.recordingFrame || null;
   }
   console.log("[GMR][OFFSCREEN] stream ID received, length:", message.streamId.length);
   prepareCapture(message.streamId, message.settings)

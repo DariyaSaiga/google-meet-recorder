@@ -122,6 +122,9 @@ async function handleStartRecording(sender, message) {
       activeCaptureTabId = status.tabId ?? null;
       activeCaptureTabUrl = status.tabUrl || null;
     }
+    // Recover only when Chrome proves the old Zoom document is gone.
+    const recovered = await recoverZoomFrame(status);
+    if (recovered?.ok === false) return recovered;
     return await performStartRecording(sender, message);
   })();
   try {
@@ -203,6 +206,9 @@ async function performStartRecording(sender, message) {
         type: "PREPARE_CAPTURE",
         target: "offscreen",
         tabId, tabUrl: activeCaptureTabUrl,
+        recordingFrame: identity.platform === "zoom" ? {
+          frameId: sender.frameId, documentId: sender.documentId
+        } : null,
         streamId,
         settings
       });
@@ -464,9 +470,84 @@ async function stopAndSaveRecording(reason) {
   }
 }
 
+// Offscreen retains frame identity across worker suspension, including pending saves.
+function isZoomStatus(status) {
+  return status.active && getRecordingIdentity(status.tabUrl)?.platform === "zoom" &&
+    Number.isInteger(status.recordingFrame?.frameId) && Boolean(status.recordingFrame?.documentId);
+}
+
+async function stopZoomFrame(status) {
+  // Recheck identity after asynchronous work so a delayed old event cannot stop a new recording.
+  const current = await getOffscreenCaptureStatus();
+  if (!isZoomStatus(current) || current.tabId !== status.tabId ||
+      current.recordingFrame.documentId !== status.recordingFrame.documentId) return;
+  console.log("[GMR][SW][ZOOM] stopping active recording after frame exit");
+  const result = await stopAndSaveRecording("zoom-frame-exit");
+  if (result.ok) {
+    console.log("[GMR][SW][ZOOM] recording saved after frame exit");
+    console.log("[GMR][SW] capture state: idle");
+  }
+  return result;
+}
+
+async function recoverZoomFrame(status, expectedTabId) {
+  if (!isZoomStatus(status) || (expectedTabId !== undefined && status.tabId !== expectedTabId)) return;
+  let frames;
+  try {
+    frames = await chrome.webNavigation.getAllFrames({ tabId: status.tabId });
+  } catch {
+    // An unavailable inventory is not proof that the recording frame disappeared.
+    return;
+  }
+  if (!Array.isArray(frames)) return;
+  const frame = frames.find((item) => item.frameId === status.recordingFrame.frameId &&
+    item.documentId === status.recordingFrame.documentId);
+  const identity = frame && getRecordingIdentity(frame.url);
+  const previous = getRecordingIdentity(status.tabUrl);
+  if (frame && identity?.platform === "zoom" && identity.meetingId !== "meeting" &&
+      identity.meetingId === previous.meetingId) return;
+  return await stopZoomFrame(status);
+}
+
+async function checkZoomFrame(tabId) {
+  if (startOperation) await startOperation;
+  return await recoverZoomFrame(await getOffscreenCaptureStatus(), tabId);
+}
+
+async function handleZoomFrameLeft(sender) {
+  console.log("[GMR][SW][ZOOM] meeting frame left");
+  if (startOperation) await startOperation;
+  const status = await getOffscreenCaptureStatus();
+  if (!isZoomStatus(status) || status.tabId !== sender?.tab?.id ||
+      status.recordingFrame.frameId !== sender.frameId ||
+      status.recordingFrame.documentId !== sender.documentId) return { ok: true, ignored: true };
+  return await stopZoomFrame(status);
+}
+
+function scheduleZoomFrameCheck(tabId) {
+  checkZoomFrame(tabId).catch((error) => console.error("[GMR][SW][ZOOM] frame check failed", error));
+}
+
+chrome.webNavigation.onCommitted.addListener((details) => scheduleZoomFrameCheck(details.tabId));
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => scheduleZoomFrameCheck(details.tabId));
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "zoom-meeting-lifecycle" ||
+      getRecordingIdentity(port.sender?.url)?.platform !== "zoom") return;
+  const tabId = port.sender?.tab?.id;
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+    scheduleZoomFrameCheck(tabId);
+    // Frame removal and port disconnect can race; one bounded retry, no polling.
+    setTimeout(() => scheduleZoomFrameCheck(tabId), 1000);
+  });
+});
+
 async function handleMeetingLeft(sender) {
   console.log("[GMR][SW] MEETING_LEFT received");
   await restoreCaptureState();
+  if (getRecordingIdentity(activeCaptureTabUrl)?.platform === "zoom") {
+    return await handleZoomFrameLeft(sender);
+  }
   if (sender?.tab?.id !== activeCaptureTabId || activeCaptureTabId === null) {
     console.warn("[GMR][SW] MEETING_LEFT ignored: not active capture tab");
     return { ok: false, stage: "meeting-left", message: "Message came from non-active capture tab" };
@@ -545,6 +626,15 @@ function respondSafely(sendResponse, response) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
     if (message?.type === "SAVE_TO_SELECTED_FOLDER" || message?.type === "PREPARE_CAPTURE" || message?.type === "STOP_CAPTURE" || message?.type === "REVOKE_BLOB_URL" || message?.type === "GET_CAPTURE_STATUS") return false;
+    if (message?.type === "ZOOM_MEETING_FRAME_LEFT") {
+      handleZoomFrameLeft(sender)
+        .then((response) => respondSafely(sendResponse, response || { ok: true, ignored: true }))
+        .catch((error) => {
+          console.error("[GMR][SW][ZOOM] frame exit save failed", error);
+          respondSafely(sendResponse, { ok: false, message: String(error) });
+        });
+      return true;
+    }
     if (message?.type === "MEETING_LEFT") {
       handleMeetingLeft(sender)
         .then((response) => respondSafely(sendResponse, response))
