@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Google Meet Recorder",
+  "name": "ShaiNote Recorder",
   "version": "0.1.0",
-  "description": "Record Google Meet meetings locally",
+  "description": "Record Google Meet, Microsoft Teams Web and Zoom Web meetings locally",
 
   "permissions": [
     "tabCapture",
@@ -18,7 +18,7 @@
   },
 
   "action": {
-    "default_title": "Google Meet Recorder",
+    "default_title": "ShaiNote Recorder",
     "default_popup": "popup.html"
   },
 
@@ -26,13 +26,6 @@
     "page": "popup.html",
     "open_in_tab": true
   },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["assets/cat-idle.png", "assets/cat-recording.png"],
-      "matches": ["https://meet.google.com/*"]
-    }
-  ],
 
   "content_scripts": [
     {

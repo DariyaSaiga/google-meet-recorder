@@ -46,7 +46,7 @@ allowButton.addEventListener("click", async () => {
       stream.getTracks().forEach((track) => track.stop());
       console.log("[GMR][MIC-PERMISSION] microphone test stream stopped");
     }
-    permissionStatus.textContent = "Доступ разрешён. Можно вернуться в Google Meet.";
+    permissionStatus.textContent = "Доступ разрешён. Можно вернуться во встречу.";
     allowButton.textContent = "♡ Доступ разрешён";
     closePermissionPage(1200);
   } catch (error) {
