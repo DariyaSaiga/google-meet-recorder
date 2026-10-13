@@ -4,6 +4,8 @@
   console.log("[GMR][CONTENT] content script loaded");
   console.log("[GMR][CONTENT] URL:", window.location.href);
 
+  const platform = window.GMRPlatforms?.googleMeet;
+
   let lastUrl = window.location.href;
   let previousMeetingState = false;
   let meetingUiVersion = 0;
@@ -181,81 +183,6 @@
     renderRecordButtonState("idle");
   }
 
-  function isGoogleMeetPage() {
-    return window.location.hostname === "meet.google.com";
-  }
-
-  function getVisibleControls() {
-    return Array.from(document.querySelectorAll("button, [role='button']"))
-      .filter((element) => {
-        if (element.id === "gmr-record-button" ||
-            element.closest("[hidden], [aria-hidden='true']") ||
-            element.getClientRects().length === 0) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return style.visibility !== "hidden" && style.display !== "none";
-      });
-  }
-
-  function elementContainsAnyLabel(element, candidates) {
-    const label = ["aria-label", "data-tooltip", "title"]
-      .map((attribute) => element.getAttribute(attribute) || "")
-      .join(" ").toLowerCase().replace(/\s+/g, " ");
-    return candidates.some((candidate) => label.includes(candidate));
-  }
-
-  function findMeetingControlSignals(controls = getVisibleControls()) {
-    const candidates = {
-      leaveCallFound: ["leave call", "leave the call", "leave meeting", "leave the meeting",
-        "end call", "hang up", "покинуть вызов", "выйти из вызова", "завершить вызов",
-        "завершить звонок", "покинуть звонок", "покинуть встречу", "выйти из встречи"],
-      microphoneFound: ["microphone", "mute", "unmute", "микрофон"],
-      cameraFound: ["camera", "turn on video", "turn off video", "камер", "включить видео",
-        "выключить видео", "отключить видео"]
-    };
-    const signals = {
-      microphoneFound: false,
-      cameraFound: false,
-      leaveCallFound: false,
-      joinOrRejoinFound: false,
-      meetingCodeFound: /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(
-        window.location.pathname.replace(/^\/+|\/+$/g, "")
-      ),
-      activeCallUiFound: false
-    };
-    const usedControls = new Set();
-    for (const [signal, labels] of Object.entries(candidates)) {
-      const control = controls.find((element) =>
-        !usedControls.has(element) && elementContainsAnyLabel(element, labels)
-      );
-      if (control) {
-        usedControls.add(control);
-        signals[signal] = true;
-      }
-    }
-    const joinCandidates = [
-      "join now", "ask to join", "rejoin", "return to home screen",
-      "присоединиться", "попросить присоединиться", "вернуться", "снова присоединиться"
-    ];
-    signals.joinOrRejoinFound = controls.some((element) => {
-      const text = (element.textContent || "").toLowerCase().replace(/\s+/g, " ");
-      return elementContainsAnyLabel(element, joinCandidates) ||
-        joinCandidates.some((candidate) => text.includes(candidate));
-    });
-    signals.activeCallUiFound = signals.leaveCallFound ||
-      (signals.microphoneFound && signals.cameraFound);
-    return signals;
-  }
-
-  function isInsideMeeting(signals = findMeetingControlSignals()) {
-    const callControlsCount = [
-      signals.microphoneFound, signals.cameraFound, signals.leaveCallFound
-    ].filter(Boolean).length;
-    return isGoogleMeetPage() && signals.meetingCodeFound && !signals.joinOrRejoinFound &&
-      (signals.leaveCallFound || callControlsCount >= 2);
-  }
-
   function requestStopCapture(button) {
     removePermissionHint();
     if (stopRequestPending) {
@@ -280,7 +207,7 @@
           renderRecordButtonState("saved");
           buttonResetTimer = window.setTimeout(() => {
             buttonResetTimer = null;
-            if (requestUiVersion === meetingUiVersion && isInsideMeeting()) renderRecordButtonState("idle");
+            if (requestUiVersion === meetingUiVersion && platform.isInsideMeeting()) renderRecordButtonState("idle");
           }, 1500);
         }
       } else {
@@ -366,7 +293,7 @@
             response.message.includes("Extension has not been invoked");
           if (needsInvocation && !invocationRetryUsed) {
             // Ignore replies for a meeting whose controls have already disappeared.
-            if (!isInsideMeeting() || document.getElementById("gmr-record-button") !== button) return;
+            if (!platform.isInsideMeeting() || document.getElementById("gmr-record-button") !== button) return;
             waitingForExtensionInvocation = true;
             invocationRetryUsed = false;
             console.log("[GMR][CONTENT] tab capture needs extension invocation");
@@ -407,7 +334,7 @@
             renderRecordButtonState("capturing");
             startRecordingTimer();
             console.log("[GMR][CONTENT] capture state: capturing");
-            if (!isInsideMeeting()) handleMeetingEnd();
+            if (!platform.isInsideMeeting()) handleMeetingEnd();
           }
           if (response?.ok !== true && response?.stage === "capture-state" && response.state === "capturing") {
             console.warn("[GMR][CONTENT] service worker reports active capture");
@@ -553,24 +480,20 @@
         lastUrl = currentUrl;
       }
 
-      const signals = findMeetingControlSignals();
-      const insideMeeting = isInsideMeeting(signals);
+      const signals = platform.getMeetingState();
+      const insideMeeting = platform.isInsideMeeting(signals);
       if (insideMeeting !== previousMeetingState) {
         console.log(insideMeeting
-          ? "[GMR][CONTENT] meeting detected"
-          : "[GMR][CONTENT] meeting no longer detected", {
-            microphoneFound: signals.microphoneFound,
-            cameraFound: signals.cameraFound,
-            leaveCallFound: signals.leaveCallFound
-          });
-        const meetingEnded = previousMeetingState && !insideMeeting;
+          ? `[GMR][CONTENT][${platform.id.toUpperCase()}] meeting detected`
+          : `[GMR][CONTENT][${platform.id.toUpperCase()}] meeting no longer detected`, signals);
+        const meetingEnded = platform.isMeetingEnded(previousMeetingState, signals);
         previousMeetingState = insideMeeting;
         meetingUiVersion += 1;
         if (meetingEnded) {
-          console.log("[GMR][CONTENT] active meeting ended");
+          console.log(`[GMR][CONTENT][${platform.id.toUpperCase()}] meeting ended`);
           handleMeetingEnd();
         } else if (insideMeeting) {
-          console.log("[GMR][CONTENT] active meeting detected");
+          console.log(`[GMR][CONTENT][${platform.id.toUpperCase()}] active meeting detected`);
           meetingExitRequestPending = false;
           if (!document.getElementById("gmr-record-button")) {
             createRecordButton();
@@ -587,7 +510,7 @@
 
   function initialize() {
     try {
-      if (!isGoogleMeetPage()) return;
+      if (!platform?.matchesLocation()) return;
       if (!document.body) {
         window.setTimeout(initialize, 50);
         return;
@@ -602,7 +525,7 @@
           if (waitingForExtensionInvocation) {
             waitingForExtensionInvocation = false;
             removePermissionHint();
-            if (button && isInsideMeeting() && !invocationRetryUsed) {
+            if (button && platform.isInsideMeeting() && !invocationRetryUsed) {
               invocationRetryUsed = true;
               console.log("[GMR][CONTENT] invocation received, retrying pending START");
               requestStartRecording(button);

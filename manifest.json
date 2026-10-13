@@ -39,6 +39,7 @@
         "https://meet.google.com/*"
       ],
       "js": [
+        "platforms/google-meet.js",
         "content.js"
       ],
       "css": [
