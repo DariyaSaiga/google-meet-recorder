@@ -1,6 +1,6 @@
 # ShaiNote Recorder
 
-Chrome Manifest V3 extension для локальной записи браузерных встреч. Запись сохраняется на компьютер в формате `.webm`; отдельная сборка не требуется.
+Chrome Manifest V3 extension для локальной записи браузерных встреч. Запись сохраняется на компьютер в формате `.webm`; отдельная сборка не требуется. По желанию (выключено по умолчанию) аудио записи отправляется в [ShaiNote](https://shainote.ai), а расшифровка и резюме сохраняются рядом с записью.
 
 ## Поддерживаемые платформы
 
@@ -20,7 +20,8 @@ Chrome Manifest V3 extension для локальной записи браузе
 - Звук встречи остаётся слышен во время записи.
 - Ручная остановка и автоматическое сохранение после выхода из встречи или закрытия вкладки.
 - Сохранение в Downloads, запрос места каждый раз или запись в выбранную папку.
-- Только локальная запись: без облачной загрузки.
+- Запись всегда сохраняется локально. Облачная загрузка — только при включённой расшифровке ShaiNote.
+- Расшифровка ShaiNote (opt-in): вход в аккаунт ShaiNote, отправка аудио после сохранения записи, сохранение `_transcript.pdf` и `_summary.pdf`, уведомления Chrome и список расшифровок с «Повторить».
 
 ## Установка для разработки
 
@@ -53,6 +54,18 @@ Chrome Manifest V3 extension для локальной записи браузе
 
 Настройки сохраняются в `chrome.storage.local` (`gmrSettings`) и применяются при следующем старте записи. Handle выбранной папки хранится в IndexedDB.
 
+## Расшифровка ShaiNote
+
+Термины — в [CONTEXT.md](CONTEXT.md), решения — в [docs/specs/transcription.md](docs/specs/transcription.md).
+
+- **Вход**: email и пароль аккаунта shainote.ai в карточке «Расшифровка ShaiNote». Токены хранятся в `chrome.storage.local` (`gmrAuth`) и обновляются автоматически. «Выйти» отзывает сессию и выключает расшифровку.
+- **Расшифровывать записи** — выключено по умолчанию, доступно только после входа. Как и остальные настройки, применяется со следующей записи. Если микрофон выключен, вашего голоса не будет в расшифровке — popup предупреждает об этом.
+- **Что отправляется**: только аудио (Meeting Audio). В режиме «Аудио + видео» параллельно пишется отдельная аудиодорожка; видео не отправляется. Записи короче 30 секунд не отправляются.
+- **Когда**: после того как запись сохранена локально. Затем расширение раз в 30 секунд проверяет статус обработки (`chrome.alarms`), в том числе после перезапуска браузера.
+- **Результат**: `<имя записи>_transcript.pdf` и `<имя записи>_summary.pdf`. При «Выбранной папке» — в ту же папку (если доступ потерян — в Загрузки); при «Загрузках» и «Спрашивать каждый раз» — в Загрузки без диалога. Если ShaiNote не создал резюме сам, расширение запрашивает его со стандартным шаблоном.
+- **Ошибки**: неудачная отправка сохраняет аудио в IndexedDB (`GMRMeetingAudio`) до «Повторить» или «Удалить». Ошибки обработки на стороне ShaiNote показываются с причиной; встреча остаётся доступна на shainote.ai.
+- Встреча на shainote.ai получает название вида `Google Meet abc-defg-hij · 2026-10-15 18:30` и ссылку на встречу без query-параметров.
+
 ## Имена файлов
 
 ```text
@@ -60,6 +73,8 @@ Meet_<meeting-id>_<YYYY-MM-DD_HH-MM>.webm
 Teams_<meeting-id>_<YYYY-MM-DD_HH-MM>.webm
 Zoom_<meeting-id>_<YYYY-MM-DD_HH-MM>.webm
 ```
+
+Расшифровка и резюме получают имя записи с суффиксом `_transcript.pdf` / `_summary.pdf`.
 
 Если ID недоступен, используется `<Platform>_meeting_<YYYY-MM-DD_HH-MM>.webm`, например `Teams_meeting_2026-10-13_18-30.webm`. Дата и время формируются при сохранении в локальном часовом поясе браузера.
 
@@ -72,7 +87,9 @@ Zoom_<meeting-id>_<YYYY-MM-DD_HH-MM>.webm
 | `platforms/teams.js` | Teams Web detection |
 | `platforms/zoom.js` | Zoom Web detection внутри meeting iframe |
 | `service-worker.js` | Управление записью, `chrome.tabCapture.getMediaStreamId`, offscreen, stop/save, имена файлов и lifecycle |
-| `offscreen.html` / `offscreen.js` | Получение media streams, AudioContext mixing, MediaRecorder, Blob и запись в выбранную папку |
+| `offscreen.html` / `offscreen.js` | Получение media streams, AudioContext mixing, MediaRecorder, Blob, запись в выбранную папку, Meeting Audio и его загрузка в ShaiNote |
+| `transcription.js` | Расшифровка ShaiNote: вход, отправка, отслеживание обработки, сохранение расшифровки и резюме, уведомления. Браузерные эффекты передаются извне, поэтому модуль тестируется в Node |
+| `meeting-audio-store.js` | IndexedDB для Meeting Audio между сохранением записи и приёмом в ShaiNote |
 | `popup.html` / `popup.css` / `popup.js` | Настройки и передача `EXTENSION_INVOKED` в content script |
 | `request-mic.html` / `request-mic.css` / `request-mic.js` | Получение разрешения микрофона |
 
@@ -90,15 +107,19 @@ Zoom lifecycle привязан к `frameId` / `documentId`. При выходе
 | `downloads` | Сохранение через Chrome Downloads и диалог выбора файла |
 | `storage` | Сохранение настроек расширения |
 | `webNavigation` | События навигации и проверка существования Zoom meeting iframe/document для stop/save и stale recovery |
+| `notifications` | Уведомления о готовой расшифровке, резюме и ошибках ShaiNote |
+| `alarms` | Периодическая проверка статуса обработки в ShaiNote |
+| `https://shainote.ai/*` (host) | Запросы к API ShaiNote |
 
-Content scripts ограничены адресами из таблицы поддерживаемых платформ. `all_frames: true` включён только для Zoom. Отдельных `host_permissions` нет. Offscreen-документ создаётся worker с причиной `USER_MEDIA`.
+Content scripts ограничены адресами из таблицы поддерживаемых платформ. `all_frames: true` включён только для Zoom. Единственный `host_permissions` — API ShaiNote. Offscreen-документ создаётся worker с причинами `USER_MEDIA` и `BLOBS`.
 
 ## Проверки и ограничения
 
 Ручная регрессионная проверка текущей версии пройдена для Google Meet, Teams Web и Zoom Web: Record/Stop, звук, сохранение, выход из встречи, закрытие вкладки, настройки и режимы записи/сохранения. Для Zoom дополнительно проверен новый старт после выхода без stale capture.
 
 - Поддерживаются только браузерные версии; native Teams/Zoom apps не поддерживаются.
-- Запись локальная; нет cloud upload, transcription, backend или аккаунтов расширения.
+- Без включённой расшифровки запись полностью локальная. С ней аудио отправляется в ShaiNote под аккаунтом пользователя.
+- Расшифровка ShaiNote ещё не проходила ручную проверку на реальном аккаунте. Чек-лист: вход/выход и ошибки входа; запись ≥ 30 с в режиме «Только аудио» и «Аудио + видео» → в списке «Отправка» → этапы обработки → `_transcript.pdf` и `_summary.pdf` рядом с записью и уведомления; запись < 30 с → «не отправлялась»; отправка без сети → «Повторить»; закрытие браузера во время обработки → документы приходят после запуска; «Выбранная папка» без доступа → документы в Загрузках.
 - Изменения DOM платформ могут потребовать обновления adapters.
 - Закрытие вкладки проверено; завершение процесса Chrome или авария не равнозначны закрытию вкладки и не гарантируют сохранение.
 - Длительная **60-минутная запись ещё НЕ проходила формальное тестирование**.
@@ -111,8 +132,16 @@ node --check popup.js
 node --check service-worker.js
 node --check offscreen.js
 node --check request-mic.js
+node --check transcription.js
+node --check meeting-audio-store.js
 node --check platforms/google-meet.js
 node --check platforms/teams.js
 node --check platforms/zoom.js
 git diff --check
+```
+
+Тесты расшифровки ShaiNote (Node 20+, без зависимостей; ShaiNote и браузер подменены фейками):
+
+```sh
+node --test tests/
 ```

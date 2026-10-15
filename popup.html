@@ -38,6 +38,31 @@
       </fieldset>
     </form>
     <p id="settings-status" role="status" aria-live="polite">Загрузка настроек...</p>
+    <section class="card" aria-labelledby="shainote-heading">
+      <h2 id="shainote-heading">Расшифровка ShaiNote</h2>
+      <form id="signin-form" hidden>
+        <p class="hint">Войдите в аккаунт ShaiNote, чтобы получать расшифровку и резюме встреч.</p>
+        <label class="field">Email <input id="signin-email" type="email" autocomplete="username" required></label>
+        <label class="field">Пароль <input id="signin-password" type="password" autocomplete="current-password" required></label>
+        <button id="signin-button" type="submit">Войти</button>
+        <p id="signin-status" role="status" aria-live="polite"></p>
+        <p class="links">
+          <a href="https://shainote.ai/register" target="_blank" rel="noopener">Регистрация</a>
+          <a href="https://shainote.ai/reset-password" target="_blank" rel="noopener">Забыли пароль?</a>
+        </p>
+      </form>
+      <div id="account" hidden>
+        <p id="account-email" class="hint"></p>
+        <button id="signout-button" class="secondary" type="button">Выйти</button>
+      </div>
+      <label class="toggle-row">Расшифровывать записи <input id="transcription-enabled" type="checkbox" role="switch" disabled></label>
+      <p id="transcription-hint" class="hint" role="status" aria-live="polite"></p>
+    </section>
+    <section id="transcriptions-card" class="card" aria-labelledby="transcriptions-heading" hidden>
+      <h2 id="transcriptions-heading">Расшифровки</h2>
+      <ul id="transcriptions-list"></ul>
+      <p class="links"><a href="https://shainote.ai/meetings/all" target="_blank" rel="noopener">Все встречи на shainote.ai</a></p>
+    </section>
     <section class="card permission" aria-labelledby="permission-heading">
       <h2 id="permission-heading">Доступ к микрофону</h2>
       <p id="microphone-status" role="status" aria-live="polite">Разрешение на микрофон ещё не проверено</p>

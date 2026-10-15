@@ -34,7 +34,8 @@ notifyExtensionInvocation();
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
   microphoneEnabled: true,
-  saveMode: "downloads"
+  saveMode: "downloads",
+  transcriptionEnabled: false
 };
 
 function normalizeSettings(value) {
@@ -45,12 +46,15 @@ function normalizeSettings(value) {
     microphoneEnabled: typeof settings.microphoneEnabled === "boolean"
       ? settings.microphoneEnabled : DEFAULT_SETTINGS.microphoneEnabled,
     saveMode: ["downloads", "ask", "selected-folder"].includes(settings.saveMode)
-      ? settings.saveMode : DEFAULT_SETTINGS.saveMode
+      ? settings.saveMode : DEFAULT_SETTINGS.saveMode,
+    transcriptionEnabled: settings.transcriptionEnabled === true
   };
 }
 
 let saveQueue = Promise.resolve();
 let statusTimer = null;
+let currentSettings = { ...DEFAULT_SETTINGS };
+let shainoteAccount = null;
 const settingsForm = document.getElementById("settings-form");
 const settingsControls = document.getElementById("settings-controls");
 const settingsStatus = document.getElementById("settings-status");
@@ -191,7 +195,8 @@ async function loadSettings() {
   const settings = normalizeSettings({
     recordingMode: stored.recordingMode ?? DEFAULT_SETTINGS.recordingMode,
     microphoneEnabled: stored.microphoneEnabled ?? DEFAULT_SETTINGS.microphoneEnabled,
-    saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode
+    saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode,
+    transcriptionEnabled: stored.transcriptionEnabled ?? DEFAULT_SETTINGS.transcriptionEnabled
   });
   console.log("[GMR][POPUP] settings loaded:", settings);
   return settings;
@@ -219,8 +224,10 @@ async function saveSettings(partial) {
 function renderSettings(settings) {
   for (const input of settingsForm.querySelectorAll("input")) {
     input.checked = input.type === "checkbox"
-      ? settings.microphoneEnabled : input.value === settings[input.name];
+      ? settings[input.name] === true : input.value === settings[input.name];
   }
+  currentSettings = settings;
+  renderTranscriptionSetting();
 }
 
 settingsForm.addEventListener("submit", (event) => event.preventDefault());
@@ -244,7 +251,7 @@ settingsForm.addEventListener("change", async (event) => {
         return;
       }
     }
-    await saveSettings({ [input.name]: value });
+    renderSettings(await saveSettings({ [input.name]: value }));
     if (input.name === "saveMode") await refreshFolderStatus();
     console.log(`[GMR][POPUP] setting changed: ${input.name} -> ${value}`);
     window.clearTimeout(statusTimer);
@@ -327,3 +334,167 @@ async function checkMicrophonePermission() {
 }
 
 checkMicrophonePermission();
+
+// ShaiNote: account, Transcription setting and the Transcriptions list.
+const signinForm = document.getElementById("signin-form");
+const signinEmail = document.getElementById("signin-email");
+const signinPassword = document.getElementById("signin-password");
+const signinButton = document.getElementById("signin-button");
+const signinStatus = document.getElementById("signin-status");
+const accountView = document.getElementById("account");
+const accountEmail = document.getElementById("account-email");
+const signoutButton = document.getElementById("signout-button");
+const transcriptionToggle = document.getElementById("transcription-enabled");
+const transcriptionHint = document.getElementById("transcription-hint");
+const transcriptionsCard = document.getElementById("transcriptions-card");
+const transcriptionsList = document.getElementById("transcriptions-list");
+
+const SERVER_STAGES = {
+  created: "В очереди ShaiNote",
+  queued: "В очереди ShaiNote",
+  processing: "ShaiNote обрабатывает запись",
+  uploading: "ShaiNote загружает аудио",
+  converting: "ShaiNote конвертирует аудио",
+  transcribing: "ShaiNote расшифровывает запись",
+  merging: "ShaiNote собирает расшифровку",
+  summarizing: "ShaiNote готовит резюме"
+};
+
+function renderTranscriptionSetting() {
+  const signedIn = Boolean(shainoteAccount);
+  signinForm.hidden = signedIn;
+  accountView.hidden = !signedIn;
+  accountEmail.textContent = signedIn ? `Вы вошли как ${shainoteAccount.email}` : "";
+  transcriptionToggle.disabled = !signedIn;
+  transcriptionToggle.checked = signedIn && currentSettings.transcriptionEnabled;
+  transcriptionHint.classList.remove("warning");
+  if (!signedIn) {
+    transcriptionHint.textContent = "Чтобы включить расшифровку, войдите в ShaiNote.";
+  } else if (!currentSettings.transcriptionEnabled) {
+    transcriptionHint.textContent = "Записи остаются только на этом компьютере.";
+  } else if (!currentSettings.microphoneEnabled) {
+    transcriptionHint.classList.add("warning");
+    transcriptionHint.textContent = "Микрофон выключен: вашего голоса не будет в расшифровке. Включите микрофон выше.";
+  } else {
+    transcriptionHint.textContent = "Со следующей записи аудио отправится в ShaiNote, а расшифровка и резюме сохранятся рядом с записью.";
+  }
+}
+
+function describeTranscription(record) {
+  switch (record.state) {
+    case "too-short": return { text: "Запись короче 30 секунд — не отправлялась" };
+    case "uploading": return { text: "Отправка аудио в ShaiNote…" };
+    case "upload-failed": return { text: record.error, error: true };
+    case "failed": return { text: `ShaiNote не смог обработать запись: ${record.error}`, error: true };
+    case "processing":
+      return record.error ? { text: record.error, error: true }
+        : { text: `${SERVER_STAGES[record.serverStatus] || "В очереди ShaiNote"}…` };
+  }
+  const transcript = { saved: "Расшифровка сохранена", pending: "Сохраняем расшифровку…", failed: "Расшифровка недоступна" }[record.transcript];
+  const summary = { saved: "резюме сохранено", pending: "готовим резюме…", waiting: "готовим резюме…", failed: "резюме недоступно" }[record.summary];
+  return { text: `${transcript}, ${summary}`, error: record.transcript === "failed" };
+}
+
+function isFinished(record) {
+  if (record.state === "uploading" || record.state === "processing") return false;
+  return record.state !== "completed" ||
+    (record.transcript !== "pending" && !["pending", "waiting"].includes(record.summary));
+}
+
+function sendTranscriptionMessage(message) {
+  return chrome.runtime.sendMessage(message).catch((error) => {
+    console.error("[GMR][POPUP] transcription message failed:", error);
+    return { ok: false, error: "Расширение недоступно, откройте страницу ещё раз" };
+  });
+}
+
+function actionButton(label, onClick, secondary) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  if (secondary) button.className = "secondary";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    await onClick();
+    button.disabled = false;
+  });
+  return button;
+}
+
+function renderTranscriptions(records) {
+  transcriptionsCard.hidden = records.length === 0;
+  transcriptionsList.replaceChildren(...records.map((record) => {
+    const item = document.createElement("li");
+    const title = document.createElement("p");
+    title.className = "transcription-title";
+    title.textContent = record.title;
+    const { text, error } = describeTranscription(record);
+    const status = document.createElement("p");
+    status.className = error ? "transcription-status error" : "transcription-status";
+    status.textContent = text;
+    item.append(title, status);
+    const actions = document.createElement("div");
+    actions.className = "transcription-actions";
+    if (record.state === "upload-failed") {
+      actions.append(actionButton("Повторить", () =>
+        sendTranscriptionMessage({ type: "TRANSCRIPTION_RETRY", localId: record.localId })));
+    }
+    if (isFinished(record)) {
+      actions.append(actionButton("Удалить", () =>
+        sendTranscriptionMessage({ type: "TRANSCRIPTION_REMOVE", localId: record.localId }), true));
+    }
+    if (actions.childElementCount) item.append(actions);
+    return item;
+  }));
+}
+
+async function loadShaiNoteState() {
+  const { gmrAuth, gmrTranscriptions } = await chrome.storage.local.get(["gmrAuth", "gmrTranscriptions"]);
+  shainoteAccount = gmrAuth ? { email: gmrAuth.email } : null;
+  renderTranscriptionSetting();
+  renderTranscriptions(gmrTranscriptions || []);
+}
+
+signinForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  signinButton.disabled = true;
+  signinStatus.textContent = "Входим…";
+  const result = await sendTranscriptionMessage({
+    type: "TRANSCRIPTION_SIGN_IN", email: signinEmail.value, password: signinPassword.value
+  });
+  signinButton.disabled = false;
+  if (result?.ok) {
+    signinPassword.value = "";
+    signinStatus.textContent = "";
+  } else {
+    signinStatus.textContent = result?.error || "Не удалось войти";
+  }
+});
+
+signoutButton.addEventListener("click", async () => {
+  signoutButton.disabled = true;
+  await sendTranscriptionMessage({ type: "TRANSCRIPTION_SIGN_OUT" });
+  signoutButton.disabled = false;
+});
+
+transcriptionToggle.addEventListener("change", async () => {
+  transcriptionToggle.disabled = true;
+  try {
+    renderSettings(await saveSettings({ transcriptionEnabled: transcriptionToggle.checked }));
+  } catch (error) {
+    console.error("[GMR][POPUP] transcription setting save failed:", error);
+    transcriptionHint.textContent = "Не удалось сохранить настройку. Попробуйте ещё раз.";
+  } finally {
+    transcriptionToggle.disabled = !shainoteAccount;
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.gmrSettings) renderSettings(normalizeSettings(changes.gmrSettings.newValue));
+  if (changes.gmrAuth || changes.gmrTranscriptions) {
+    loadShaiNoteState().catch((error) => console.error("[GMR][POPUP] ShaiNote state load failed:", error));
+  }
+});
+
+loadShaiNoteState().catch((error) => console.error("[GMR][POPUP] ShaiNote state load failed:", error));

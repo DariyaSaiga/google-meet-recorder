@@ -1,5 +1,7 @@
 "use strict";
 
+importScripts("meeting-audio-store.js", "transcription.js");
+
 console.log("[GMR][SW] service worker loaded");
 
 // Allowed states: idle, starting, capturing, stopping (reserved for STOP).
@@ -13,7 +15,8 @@ console.log("[GMR][SW] initial capture state:", captureState);
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
   microphoneEnabled: true,
-  saveMode: "downloads"
+  saveMode: "downloads",
+  transcriptionEnabled: false
 };
 
 function normalizeSettings(value) {
@@ -24,7 +27,8 @@ function normalizeSettings(value) {
     microphoneEnabled: typeof settings.microphoneEnabled === "boolean"
       ? settings.microphoneEnabled : DEFAULT_SETTINGS.microphoneEnabled,
     saveMode: ["downloads", "ask", "selected-folder"].includes(settings.saveMode)
-      ? settings.saveMode : DEFAULT_SETTINGS.saveMode
+      ? settings.saveMode : DEFAULT_SETTINGS.saveMode,
+    transcriptionEnabled: settings.transcriptionEnabled === true
   };
 }
 
@@ -35,12 +39,14 @@ async function getRecordingSettings() {
     console.log("[GMR][SW] raw stored settings:", {
       recordingMode: stored.recordingMode,
       microphoneEnabled: stored.microphoneEnabled,
-      saveMode: stored.saveMode
+      saveMode: stored.saveMode,
+      transcriptionEnabled: stored.transcriptionEnabled
     });
     const settings = normalizeSettings({
       recordingMode: stored.recordingMode ?? DEFAULT_SETTINGS.recordingMode,
       microphoneEnabled: stored.microphoneEnabled ?? DEFAULT_SETTINGS.microphoneEnabled,
-      saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode
+      saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode,
+      transcriptionEnabled: stored.transcriptionEnabled ?? DEFAULT_SETTINGS.transcriptionEnabled
     });
     console.log("[GMR][SW] resolved recording settings:", settings);
     return settings;
@@ -70,8 +76,8 @@ async function ensureOffscreenDocument() {
     try {
       await chrome.offscreen.createDocument({
         url: "offscreen.html",
-        reasons: ["USER_MEDIA"],
-        justification: "Capture meeting tab media for local recording"
+        reasons: ["USER_MEDIA", "BLOBS"],
+        justification: "Capture meeting tab media for local recording and upload its audio for transcription"
       });
       console.log("[GMR][SW] offscreen document created");
     } catch (error) {
@@ -455,6 +461,11 @@ async function stopAndSaveRecording(reason) {
       activeCaptureTabUrl = null;
       console.log("[GMR][SW] capture state: stopping -> idle");
       console.log("[GMR][SW] active capture tab cleared");
+      if (response.transcription) {
+        // Never let Transcription delay or fail the Recording's own save.
+        handOffToTranscription(response.transcription, recordingTabUrl, filename, saveMode)
+          .catch((error) => console.error("[GMR][SW] transcription hand-off failed:", error));
+      }
       return { ok: true, stage: "recording-saved", state: "idle", message: "Recording saved" };
     } catch (error) {
       console.error(stage === "download" ? "[GMR][SW] download failed" : "[GMR][SW] STOP_CAPTURE failed:", error);
@@ -469,6 +480,142 @@ async function stopAndSaveRecording(reason) {
     stopOperation = null;
   }
 }
+
+const PLATFORM_NAMES = { meet: "Google Meet", teams: "Microsoft Teams", zoom: "Zoom" };
+const TRANSCRIPTION_ALARM = "gmr-transcription-poll";
+
+function toBase64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function isOffscreenDocumentOpen() {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [chrome.runtime.getURL("offscreen.html")]
+  });
+  return contexts.length > 0;
+}
+
+const transcription = GMRTranscription.createTranscription({
+  fetch: (...args) => fetch(...args),
+  now: () => Date.now(),
+  storage: {
+    get: async (key) => (await chrome.storage.local.get(key))[key],
+    set: (key, value) => chrome.storage.local.set({ [key]: value }),
+    remove: (key) => chrome.storage.local.remove(key)
+  },
+  notify: async (title, message) => {
+    await chrome.notifications.create({
+      type: "basic", iconUrl: chrome.runtime.getURL("assets/cat-idle.png"), title, message
+    });
+  },
+  download: async (filename, bytes) => {
+    await chrome.downloads.download({
+      url: `data:application/pdf;base64,${toBase64(bytes)}`,
+      filename, saveAs: false, conflictAction: "uniquify"
+    });
+  },
+  writeToFolder: async (filename, bytes) => {
+    await ensureOffscreenDocument();
+    const result = await chrome.runtime.sendMessage({
+      type: "WRITE_DOCUMENT_TO_FOLDER", target: "offscreen", filename, base64: toBase64(bytes)
+    });
+    return result?.ok === true;
+  },
+  requestUpload: async (request) => {
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({ type: "UPLOAD_MEETING_AUDIO", target: "offscreen", ...request });
+  },
+  isUploadInFlight: async (localId) => {
+    if (!(await isOffscreenDocumentOpen())) return false;
+    const status = await chrome.runtime.sendMessage({ type: "GET_UPLOAD_STATUS", target: "offscreen", localId });
+    return status?.inFlight === true;
+  },
+  deleteMeetingAudio: (localId) => GMRMeetingAudioStore.delete(localId)
+});
+
+// Poll ShaiNote only while some Transcription is still waiting on it.
+async function syncTranscriptionPolling() {
+  if (await transcription.needsPolling()) {
+    if (!(await chrome.alarms.get(TRANSCRIPTION_ALARM))) {
+      await chrome.alarms.create(TRANSCRIPTION_ALARM, { periodInMinutes: 0.5 });
+    }
+  } else {
+    await chrome.alarms.clear(TRANSCRIPTION_ALARM);
+  }
+}
+
+async function runTranscription(operation) {
+  try {
+    return await operation();
+  } finally {
+    await syncTranscriptionPolling();
+  }
+}
+
+async function handOffToTranscription(kept, recordingUrl, filename, saveMode) {
+  const identity = getRecordingIdentity(recordingUrl);
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const meetingId = identity?.meetingId && identity.meetingId !== "meeting" ? ` ${identity.meetingId}` : "";
+  let meetingUrl = null;
+  try {
+    // Origin and path only: Zoom links carry passcodes in the query string.
+    const url = new URL(recordingUrl);
+    meetingUrl = `${url.origin}${url.pathname}`;
+  } catch {
+    // Without a URL the meeting simply has no link on shainote.ai.
+  }
+  console.log("[GMR][SW] handing Recording to Transcription:", { localId: kept.localId, durationMs: kept.durationMs });
+  await runTranscription(() => transcription.recordingSaved({
+    localId: kept.localId,
+    recordingName: filename.replace(/\.webm$/, ""),
+    title: `${PLATFORM_NAMES[identity?.platform] || "Встреча"}${meetingId} · ${stamp}`,
+    meetingUrl,
+    saveMode,
+    durationMs: kept.durationMs
+  }));
+}
+
+async function handleTranscriptionMessage(message) {
+  switch (message.type) {
+    case "TRANSCRIPTION_UPLOAD_RESULT":
+      await runTranscription(() => transcription.uploadFinished(message));
+      return { ok: true };
+    case "TRANSCRIPTION_SIGN_IN":
+      return await transcription.signIn(String(message.email || "").trim(), String(message.password || ""));
+    case "TRANSCRIPTION_SIGN_OUT": {
+      await transcription.signOut();
+      // Transcription can't work signed out; don't leave it silently enabled.
+      const stored = (await chrome.storage.local.get("gmrSettings")).gmrSettings || {};
+      await chrome.storage.local.set({ gmrSettings: { ...stored, transcriptionEnabled: false } });
+      return { ok: true };
+    }
+    case "TRANSCRIPTION_RETRY":
+      await runTranscription(() => transcription.retry(message.localId));
+      return { ok: true };
+    case "TRANSCRIPTION_REMOVE":
+      await runTranscription(() => transcription.remove(message.localId));
+      return { ok: true };
+  }
+  return { ok: false, message: "Unknown transcription message" };
+}
+
+function resumeTranscription() {
+  runTranscription(() => transcription.tick())
+    .catch((error) => console.error("[GMR][SW] transcription resume failed:", error));
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === TRANSCRIPTION_ALARM) resumeTranscription();
+});
+chrome.runtime.onStartup.addListener(resumeTranscription);
+chrome.runtime.onInstalled.addListener(resumeTranscription);
 
 // Offscreen retains frame identity across worker suspension, including pending saves.
 function isZoomStatus(status) {
@@ -625,7 +772,19 @@ function respondSafely(sendResponse, response) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
-    if (message?.type === "SAVE_TO_SELECTED_FOLDER" || message?.type === "PREPARE_CAPTURE" || message?.type === "STOP_CAPTURE" || message?.type === "REVOKE_BLOB_URL" || message?.type === "GET_CAPTURE_STATUS") return false;
+    if (message?.type === "SAVE_TO_SELECTED_FOLDER" || message?.type === "PREPARE_CAPTURE" || message?.type === "STOP_CAPTURE" || message?.type === "REVOKE_BLOB_URL" || message?.type === "GET_CAPTURE_STATUS" ||
+        message?.type === "UPLOAD_MEETING_AUDIO" || message?.type === "GET_UPLOAD_STATUS" || message?.type === "WRITE_DOCUMENT_TO_FOLDER") return false;
+    if (typeof message?.type === "string" && message.type.startsWith("TRANSCRIPTION_")) {
+      // Only extension pages (popup, offscreen) may drive Transcription, never content scripts.
+      if (!sender?.url?.startsWith(chrome.runtime.getURL(""))) return false;
+      handleTranscriptionMessage(message)
+        .then((response) => respondSafely(sendResponse, response))
+        .catch((error) => {
+          console.error("[GMR][SW] transcription message failed:", error);
+          respondSafely(sendResponse, { ok: false, error: "Ошибка расширения, попробуйте ещё раз" });
+        });
+      return true;
+    }
     if (message?.type === "ZOOM_MEETING_FRAME_LEFT") {
       handleZoomFrameLeft(sender)
         .then((response) => respondSafely(sendResponse, response || { ok: true, ignored: true }))
