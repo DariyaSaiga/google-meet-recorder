@@ -2,9 +2,15 @@
 
 importScripts("meeting-audio-store.js", "transcription.js");
 
-// ShaiNote tokens live in storage.local: keep it out of content scripts' reach.
-chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
-  .catch((error) => console.error("[GMR][SW] storage access level not set:", error));
+// ShaiNote tokens live in storage.local: keep it out of content scripts' reach,
+// and refuse to hold tokens at all (fail closed) if that can't be guaranteed.
+const AUTH_STORAGE_KEY = "gmrAuth";
+const storageRestricted = chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
+  .then(() => true, async (error) => {
+    console.error("[GMR][SW] storage access level not set; ShaiNote sign-in disabled:", error);
+    await chrome.storage.local.remove(AUTH_STORAGE_KEY).catch(() => {});
+    return false;
+  });
 
 console.log("[GMR][SW] service worker loaded");
 
@@ -508,8 +514,16 @@ const transcription = GMRTranscription.createTranscription({
   fetch: (...args) => fetch(...args),
   now: () => Date.now(),
   storage: {
-    get: async (key) => (await chrome.storage.local.get(key))[key],
-    set: (key, value) => chrome.storage.local.set({ [key]: value }),
+    get: async (key) => {
+      if (key === AUTH_STORAGE_KEY && !(await storageRestricted)) return undefined;
+      return (await chrome.storage.local.get(key))[key];
+    },
+    set: async (key, value) => {
+      if (key === AUTH_STORAGE_KEY && !(await storageRestricted)) {
+        throw new Error("Storage is not restricted to the extension; not storing ShaiNote tokens");
+      }
+      await chrome.storage.local.set({ [key]: value });
+    },
     remove: (key) => chrome.storage.local.remove(key)
   },
   notify: async (title, message) => {
