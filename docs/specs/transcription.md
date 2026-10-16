@@ -10,7 +10,7 @@ A user records a browser meeting (Google Meet, Teams Web, Zoom Web) and gets a l
 
 The extension gets an opt-in **Transcription** setting. Once the user signs in to their **ShaiNote Account** in the popup and enables it, every Recording that is saved also sends its **Meeting Audio** (always audio only, even for audio + video Recordings) to ShaiNote. The extension then follows the **Job** in the background, including across browser restarts. When the Job completes, it saves the **Transcript** and the **Summary** as PDFs next to the Recording, following the Recording's **Save Mode**.
 
-The local Recording is always saved first and never depends on ShaiNote. Chrome notifications report results. The popup lists recent Transcriptions with their status and offers Retry when an upload fails.
+The local Recording is always saved first and never depends on ShaiNote. Chrome notifications report results, and a failed upload's notification offers Retry. The popup keeps its existing design: a sign-in screen stands in front of the settings until the user signs in, after which the only additions are the account line in the header and the Transcription toggle.
 
 ## User Stories
 
@@ -37,16 +37,16 @@ The local Recording is always saved first and never depends on ShaiNote. Chrome 
 21. As a meeting recorder, I want a Chrome notification when the Transcript is saved, so that I know it's ready.
 22. As a meeting recorder, I want a separate notification when the Summary is saved, so that a slow Summary doesn't hold back the Transcript.
 23. As a meeting recorder, I want a notification when a Job fails, with the reason, so that I'm not left waiting.
-24. As a meeting recorder, I want a Transcriptions list in the popup with each item's status (uploading, processing stage, saved, failed, too short), so that I can see progress at any time.
-25. As a meeting recorder, I want the status to update live while the popup is open.
-26. As a meeting recorder whose upload failed (network, expired sign-in, plan limit, file too large), I want a Retry button, so that I can send the same Meeting Audio again without re-recording.
-27. As a meeting recorder, I want failed or finished entries to be removable from the list, which deletes any kept Meeting Audio, so that the list and storage stay clean.
+24. As a meeting recorder, I want the popup to keep its existing look, with sign-in as a separate screen in front of the settings, so that the extension stays simple.
+25. As a meeting recorder, I want to see which account I'm signed in as and sign out from the popup header.
+26. As a meeting recorder whose upload failed (network, expired sign-in, plan limit, file too large), I want a Retry button on the notification, so that I can send the same Meeting Audio again without re-recording.
+27. As a meeting recorder, I want kept Meeting Audio of old failed uploads to be cleaned up automatically, so that storage stays small.
 28. As a meeting recorder whose sign-in expired, I want the extension to refresh it silently, so that I don't have to sign in again for each meeting.
 29. As a meeting recorder whose refresh token is no longer valid, I want to be signed out and told to sign in again, with the upload kept for Retry.
 30. As a meeting recorder who closed the browser while a Job was processing, I want the extension to resume tracking it on next start and still save the documents.
 31. As a meeting recorder who closed the browser mid-upload, I want the upload to restart automatically on next start.
 32. As a meeting recorder whose Job failed on the server, I want the failure reason shown, and a link to shainote.ai, since Retry isn't possible there.
-33. As a meeting recorder, I want a link to shainote.ai in the popup, so that I can see all meetings, Transcripts and Summaries there.
+33. As a meeting recorder, I want every meeting to also be on shainote.ai, so that I can see all meetings, Transcripts and Summaries there.
 34. As a meeting recorder whose Summary failed but Transcript succeeded, I want to keep the Transcript and see that only the Summary failed.
 35. As a Russian-speaking user, I want all new UI and notifications in Russian, matching the existing popup.
 
@@ -110,11 +110,10 @@ The local Recording is always saved first and never depends on ShaiNote. Chrome 
   - Every other mode: `chrome.downloads.download` with `saveAs: false`.
 - **Auth failures**: A 401 triggers one refresh followed by one retry. If the refresh fails, the extension signs out locally; the affected upload becomes `upload-failed` with "sign in again".
 - **Popup**:
-  - Sign-in card with email and password, links to register and reset password, and a signed-in view with Sign out.
-  - Transcription toggle, disabled while signed out.
-  - Microphone hint.
-  - Transcriptions list with Retry and Remove.
-  - Live updates via `chrome.storage.onChanged`.
+  - Signed out: only a sign-in screen (email, password, links to register and reset password), in the existing card style. The settings are shown once signed in.
+  - One "Расшифровка" card with the Transcription toggle, in the same style as the Microphone card.
+  - Microphone hint, shown only when Transcription is on and the microphone is off.
+  - No Transcriptions list: progress and results come only as Chrome notifications.
 - **Meeting title on ShaiNote**: `<Platform name> <meeting id> · YYYY-MM-DD HH:MM`. The meeting URL is the origin plus path only. Failing to set the title or URL is not fatal.
 
 ## Testing Decisions

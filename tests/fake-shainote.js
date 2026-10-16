@@ -156,7 +156,7 @@ function createFakeBrowser() {
   browser.deps = {
     now: () => browser.now,
     storage: browser.storage,
-    notify: async (title, message) => { browser.notifications.push({ title, message }); },
+    notify: async (title, message, options) => { browser.notifications.push({ title, message, ...options }); },
     download: async (filename, bytes) => { browser.downloads.push({ filename, text: decode(bytes) }); },
     writeToFolder: async (filename, bytes) => {
       if (!browser.folderAvailable) return false;

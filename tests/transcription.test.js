@@ -121,7 +121,11 @@ test("an upload ShaiNote rejects keeps the Meeting Audio and explains why", asyn
   assert.equal(record.state, "upload-failed");
   assert.equal(record.error, "Файл слишком большой для ShaiNote");
   assert.equal(browser.meetingAudio.has("rec-1"), true);
-  assert.equal(browser.notifications.at(-1).title, "Не удалось отправить аудио в ShaiNote");
+  assert.deepEqual(browser.notifications.at(-1), {
+    title: "Не удалось отправить аудио в ShaiNote",
+    message: "Google Meet abc-defg-hij · 2026-10-15 18:30: Файл слишком большой для ShaiNote",
+    retryLocalId: "rec-1"
+  }, "the notification offers Retry");
 });
 
 test("an upload that never reaches ShaiNote can be retried", async () => {
@@ -414,17 +418,6 @@ test("failing to set the meeting title on ShaiNote doesn't stop the Job", async 
   await recordAndUpload(ctx);
 
   assert.equal((await transcription.list())[0].state, "processing");
-});
-
-test("removing an entry forgets it and drops its kept Meeting Audio", async () => {
-  const { browser, transcription } = setup();
-  browser.meetingAudio.add("rec-1");
-  await transcription.recordingSaved(RECORDING); // signed out: kept for Retry
-
-  await transcription.remove("rec-1");
-
-  assert.deepEqual(await transcription.list(), []);
-  assert.equal(browser.meetingAudio.has("rec-1"), false);
 });
 
 test("signing in with a wrong password explains the problem and stays signed out", async () => {

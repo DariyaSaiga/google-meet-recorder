@@ -493,6 +493,7 @@ async function stopAndSaveRecording(reason) {
 
 const PLATFORM_NAMES = { meet: "Google Meet", teams: "Microsoft Teams", zoom: "Zoom" };
 const TRANSCRIPTION_ALARM = "gmr-transcription-poll";
+const RETRY_NOTIFICATION_PREFIX = "gmr-retry:";
 
 function toBase64(bytes) {
   let binary = "";
@@ -526,10 +527,17 @@ const transcription = GMRTranscription.createTranscription({
     },
     remove: (key) => chrome.storage.local.remove(key)
   },
-  notify: async (title, message) => {
-    await chrome.notifications.create({
+  notify: async (title, message, options) => {
+    const notification = {
       type: "basic", iconUrl: chrome.runtime.getURL("assets/cat-idle.png"), title, message
-    });
+    };
+    if (options?.retryLocalId) {
+      // The popup has no list of Transcriptions, so Retry lives on the notification.
+      notification.buttons = [{ title: "Повторить" }];
+      await chrome.notifications.create(`${RETRY_NOTIFICATION_PREFIX}${options.retryLocalId}`, notification);
+    } else {
+      await chrome.notifications.create(notification);
+    }
   },
   download: async (filename, bytes) => {
     await chrome.downloads.download({
@@ -614,12 +622,6 @@ async function handleTranscriptionMessage(message) {
       await chrome.storage.local.set({ gmrSettings: { ...stored, transcriptionEnabled: false } });
       return { ok: true };
     }
-    case "TRANSCRIPTION_RETRY":
-      await runTranscription(() => transcription.retry(message.localId));
-      return { ok: true };
-    case "TRANSCRIPTION_REMOVE":
-      await runTranscription(() => transcription.remove(message.localId));
-      return { ok: true };
   }
   return { ok: false, message: "Unknown transcription message" };
 }
@@ -631,6 +633,12 @@ function resumeTranscription() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TRANSCRIPTION_ALARM) resumeTranscription();
+});
+chrome.notifications.onButtonClicked.addListener((notificationId) => {
+  if (!notificationId.startsWith(RETRY_NOTIFICATION_PREFIX)) return;
+  chrome.notifications.clear(notificationId);
+  runTranscription(() => transcription.retry(notificationId.slice(RETRY_NOTIFICATION_PREFIX.length)))
+    .catch((error) => console.error("[GMR][SW] transcription retry failed:", error));
 });
 chrome.runtime.onStartup.addListener(resumeTranscription);
 chrome.runtime.onInstalled.addListener(resumeTranscription);

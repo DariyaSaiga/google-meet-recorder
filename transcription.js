@@ -197,7 +197,7 @@
 
     async function failUpload(localId, error) {
       const record = await updateRecord(localId, { state: "upload-failed", error });
-      if (record) await notify("Не удалось отправить аудио в ShaiNote", `${record.title}: ${error}`);
+      if (record) await notify("Не удалось отправить аудио в ShaiNote", `${record.title}: ${error}`, { retryLocalId: localId });
     }
 
     async function retry(localId) {
@@ -240,10 +240,6 @@
       }
     }
 
-    async function remove(localId) {
-      await saveRecords((await loadRecords()).filter((item) => item.localId !== localId));
-      await deps.deleteMeetingAudio(localId);
-    }
 
     async function saveDocument(record, kind, response) {
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -361,7 +357,6 @@
       recordingSaved: (recording) => exclusive(() => recordingSaved(recording)),
       uploadFinished: (result) => exclusive(() => uploadFinished(result)),
       retry: (localId) => exclusive(() => retry(localId)),
-      remove: (localId) => exclusive(() => remove(localId)),
       account: () => exclusive(async () => {
         const auth = await storage.get(AUTH_KEY);
         return auth ? { email: auth.email } : null;
