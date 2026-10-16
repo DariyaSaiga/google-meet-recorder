@@ -14,7 +14,25 @@
       <button id="back-arrow" class="icon-button" type="button" aria-label="Назад к записи" hidden><img class="icon" src="assets/ui/arrow-left.svg" alt="" aria-hidden="true"></button>
       <div class="brand">ShaiNote<small>Recorder</small></div>
       <button id="back-to-recording" class="text-button back-label" type="button" hidden>Назад к записи</button>
+      <p id="account" class="account" hidden><span id="account-email"></span><button id="signout-button" class="text-button" type="button">Выйти</button></p>
     </header>
+    <form id="signin-form" class="signin-form" hidden>
+      <section class="screen" aria-labelledby="signin-title">
+        <div><h1 id="signin-title" tabindex="-1">Вход в ShaiNote</h1><p class="subtitle">Войдите, чтобы записывать встречи и получать транскрипцию.</p></div>
+        <div class="signin-fields">
+          <label class="field">Email <input id="signin-email" type="email" autocomplete="username" required></label>
+          <label class="field">Пароль <input id="signin-password" type="password" autocomplete="current-password" required></label>
+          <p id="signin-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+      <footer class="action-area">
+        <button id="signin-button" class="primary-button" type="submit">Войти</button>
+        <p class="links">
+          <a href="https://shainote.ai/register" target="_blank" rel="noopener">Регистрация</a>
+          <a href="https://shainote.ai/reset-password" target="_blank" rel="noopener">Забыли пароль?</a>
+        </p>
+      </footer>
+    </form>
     <form id="settings-form">
       <fieldset id="settings-controls" disabled>
         <section id="new-recording" class="screen" aria-labelledby="new-title">
@@ -36,6 +54,10 @@
               <p id="microphone-status" role="status" aria-live="polite">Проверяем доступ к микрофону</p>
               <button id="enable-microphone" class="text-button" type="button">Разрешить микрофон</button>
             </div>
+          </div>
+          <div class="transcription-block">
+            <label class="toggle-row" for="transcription-enabled"><span class="icon-label"><img class="icon" src="assets/ui/audio-lines.svg" alt="" aria-hidden="true">Транскрипция и сводка</span><input id="transcription-enabled" name="transcriptionEnabled" type="checkbox" role="switch"></label>
+            <p id="transcription-hint" class="status-line warning" role="status" aria-live="polite"></p>
           </div>
           <div class="save-summary">
             <div class="section-heading"><span class="eyebrow">КУДА СОХРАНИТЬ</span><button id="edit-save-settings" class="text-button" type="button">Изменить →</button></div>

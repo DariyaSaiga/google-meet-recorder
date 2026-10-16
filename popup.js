@@ -45,7 +45,8 @@ const invocationReady = notifyExtensionInvocation();
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
   microphoneEnabled: true,
-  saveMode: "downloads"
+  saveMode: "downloads",
+  transcriptionEnabled: false
 };
 
 function normalizeSettings(value) {
@@ -56,12 +57,15 @@ function normalizeSettings(value) {
     microphoneEnabled: typeof settings.microphoneEnabled === "boolean"
       ? settings.microphoneEnabled : DEFAULT_SETTINGS.microphoneEnabled,
     saveMode: ["downloads", "ask", "selected-folder"].includes(settings.saveMode)
-      ? settings.saveMode : DEFAULT_SETTINGS.saveMode
+      ? settings.saveMode : DEFAULT_SETTINGS.saveMode,
+    transcriptionEnabled: settings.transcriptionEnabled === true
   };
 }
 
 let saveQueue = Promise.resolve();
 let statusTimer = null;
+let currentSettings = { ...DEFAULT_SETTINGS };
+let shainoteAccount;
 const settingsForm = document.getElementById("settings-form");
 const settingsControls = document.getElementById("settings-controls");
 const settingsStatus = document.getElementById("settings-status");
@@ -202,7 +206,8 @@ async function loadSettings() {
   const settings = normalizeSettings({
     recordingMode: stored.recordingMode ?? DEFAULT_SETTINGS.recordingMode,
     microphoneEnabled: stored.microphoneEnabled ?? DEFAULT_SETTINGS.microphoneEnabled,
-    saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode
+    saveMode: stored.saveMode ?? DEFAULT_SETTINGS.saveMode,
+    transcriptionEnabled: stored.transcriptionEnabled ?? DEFAULT_SETTINGS.transcriptionEnabled
   });
   console.log("[GMR][POPUP] settings loaded:", settings);
   return settings;
@@ -230,8 +235,10 @@ async function saveSettings(partial) {
 function renderSettings(settings) {
   for (const input of settingsForm.querySelectorAll("input")) {
     input.checked = input.type === "checkbox"
-      ? settings.microphoneEnabled : input.value === settings[input.name];
+      ? settings[input.name] === true : input.value === settings[input.name];
   }
+  currentSettings = settings;
+  renderTranscriptionSetting();
 }
 
 settingsForm.addEventListener("submit", (event) => event.preventDefault());
@@ -255,7 +262,7 @@ settingsForm.addEventListener("change", async (event) => {
         return;
       }
     }
-    await saveSettings({ [input.name]: value });
+    renderSettings(await saveSettings({ [input.name]: value }));
     if (input.name === "saveMode") await refreshFolderStatus();
     console.log(`[GMR][POPUP] setting changed: ${input.name} -> ${value}`);
     window.clearTimeout(statusTimer);
@@ -413,9 +420,13 @@ function renderUiState() {
   const active = state && state.captureState !== "idle";
   const saved = state?.saved;
   const needsPermission = microphoneToggle.checked && microphonePermission !== "granted";
-  const screen = active ? "active" : saved ? "saved" : settingsViewOpen ? "save" : needsPermission ? "permission" : "new";
+  // undefined: the ShaiNote account is still loading, so don't flash the sign-in screen.
+  const signedOut = shainoteAccount === null;
+  const screen = active ? "active" : saved ? "saved" : signedOut ? "signin"
+    : settingsViewOpen ? "save" : needsPermission ? "permission" : "new";
   appShell.dataset.screen = screen;
   settingsForm.hidden = !["new", "save"].includes(screen);
+  signinForm.hidden = screen !== "signin";
   mainActions.hidden = settingsForm.hidden;
   document.getElementById("new-recording").hidden = screen !== "new";
   document.getElementById("save-settings").hidden = screen !== "save";
@@ -428,7 +439,8 @@ function renderUiState() {
   document.getElementById("back-to-recording").hidden = !showBack;
   document.getElementById("back-to-recording").disabled = uiBusy;
   document.getElementById("back-to-recording").textContent = screen === "saved" ? "На главную" : "Назад к записи";
-  liveUi.hidden = !settingsForm.hidden;
+  accountView.hidden = !shainoteAccount || showBack;
+  liveUi.hidden = !["active", "saved", "permission"].includes(screen);
   if (renderedScreen !== screen) {
     clearInterval(popupTimer);
     popupTimer = null;
@@ -555,6 +567,7 @@ document.getElementById("back-arrow").addEventListener("click", returnToMain);
 document.getElementById("save-settings-done").addEventListener("click", () => runUiAction(async () => {
   const settings = normalizeSettings(Object.fromEntries(new FormData(settingsForm)));
   settings.microphoneEnabled = microphoneToggle.checked;
+  settings.transcriptionEnabled = document.getElementById("transcription-enabled").checked;
   renderSettings(await saveSettings(settings));
   settingsViewOpen = false;
 }));
@@ -564,6 +577,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.gmrSettings) {
     renderSettings(normalizeSettings(changes.gmrSettings.newValue));
     renderUiState();
+  }
+  if (area === "local" && changes.gmrAuth) {
+    loadShaiNoteAccount().catch((error) => console.error("[GMR][POPUP] ShaiNote account load failed:", error));
   }
 });
 window.addEventListener("focus", () => {
@@ -578,3 +594,60 @@ liveUi.addEventListener("change", (event) => {
     document.getElementById("popup-without-mic").click();
   }
 });
+
+// ShaiNote: the sign-in screen stands in front of the recorder until the user signs in.
+const signinForm = document.getElementById("signin-form");
+const signinEmail = document.getElementById("signin-email");
+const signinPassword = document.getElementById("signin-password");
+const signinButton = document.getElementById("signin-button");
+const signinStatus = document.getElementById("signin-status");
+const accountView = document.getElementById("account");
+const accountEmail = document.getElementById("account-email");
+const signoutButton = document.getElementById("signout-button");
+const transcriptionHint = document.getElementById("transcription-hint");
+
+function renderTranscriptionSetting() {
+  accountEmail.textContent = shainoteAccount?.email || "";
+  transcriptionHint.textContent = currentSettings.transcriptionEnabled && !currentSettings.microphoneEnabled
+    ? "Микрофон выключен: вашего голоса не будет в транскрипции." : "";
+}
+
+function sendTranscriptionMessage(message) {
+  return chrome.runtime.sendMessage(message).catch((error) => {
+    console.error("[GMR][POPUP] transcription message failed:", error);
+    return { ok: false, error: "Расширение недоступно, откройте страницу ещё раз" };
+  });
+}
+
+async function loadShaiNoteAccount() {
+  const { gmrAuth } = await chrome.storage.local.get("gmrAuth");
+  shainoteAccount = gmrAuth ? { email: gmrAuth.email } : null;
+  renderTranscriptionSetting();
+  renderUiState();
+}
+
+signinForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  signinButton.disabled = true;
+  signinStatus.classList.remove("error");
+  signinStatus.textContent = "Входим…";
+  const result = await sendTranscriptionMessage({
+    type: "TRANSCRIPTION_SIGN_IN", email: signinEmail.value, password: signinPassword.value
+  });
+  signinButton.disabled = false;
+  if (result?.ok) {
+    signinPassword.value = "";
+    signinStatus.textContent = "";
+  } else {
+    signinStatus.classList.add("error");
+    signinStatus.textContent = result?.error || "Не удалось войти";
+  }
+});
+
+signoutButton.addEventListener("click", async () => {
+  signoutButton.disabled = true;
+  await sendTranscriptionMessage({ type: "TRANSCRIPTION_SIGN_OUT" });
+  signoutButton.disabled = false;
+});
+
+loadShaiNoteAccount().catch((error) => console.error("[GMR][POPUP] ShaiNote account load failed:", error));

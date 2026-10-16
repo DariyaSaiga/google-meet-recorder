@@ -22,6 +22,11 @@ let pendingRecording = null;
 let recordingTabId = null;
 let recordingTabUrl = null;
 let recordingFrame = null;
+// With Transcription on, the meeting mix is also captured as 16 kHz mono PCM:
+// ShaiNote takes WAV (not WebM), and 16 kHz is plenty for speech.
+const MEETING_AUDIO_SAMPLE_RATE = 16000;
+let meetingAudioCapture = null;
+const uploadsInFlight = new Set();
 
 function createMediaRecorder(settings) {
   if (!finalRecordingStream?.getAudioTracks().some((track) => track.readyState === "live")) {
@@ -56,6 +61,102 @@ function createMediaRecorder(settings) {
       resolve();
     }, { once: true });
   });
+}
+
+async function startMeetingAudioCapture() {
+  // Chrome resamples the mix into this 16 kHz context.
+  const context = new AudioContext({ sampleRate: MEETING_AUDIO_SAMPLE_RATE });
+  try {
+    if (context.state === "suspended") await context.resume();
+    await context.audioWorklet.addModule("meeting-audio-worklet.js");
+    const source = context.createMediaStreamSource(new MediaStream(mixedStream.getAudioTracks()));
+    // No outputs: the node is pulled on its own and never reaches the speakers.
+    const node = new AudioWorkletNode(context, "meeting-audio-capture", { numberOfOutputs: 0 });
+    const capture = { context, source, node, chunks: [], onDone: null };
+    node.port.onmessage = (event) => {
+      if (event.data.chunk) capture.chunks.push(event.data.chunk);
+      if (event.data.done) capture.onDone?.();
+    };
+    source.connect(node);
+    meetingAudioCapture = capture;
+    console.log("[GMR][OFFSCREEN] Meeting Audio capture started:", context.sampleRate, "Hz");
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function stopMeetingAudioCapture() {
+  const capture = meetingAudioCapture;
+  if (!capture) return null;
+  meetingAudioCapture = null;
+  // Collect the samples still buffered in the worklet, but never hang the stop on it.
+  await Promise.race([
+    new Promise((resolve) => {
+      capture.onDone = resolve;
+      capture.node.port.postMessage("flush");
+    }),
+    new Promise((resolve) => setTimeout(resolve, 2000))
+  ]);
+  capture.source.disconnect();
+  await capture.context.close().catch(() => {});
+  const wav = encodeWav(capture.chunks, capture.context.sampleRate);
+  return wav && { wav, silent: isSilent(capture.chunks) };
+}
+
+// A meeting tab with nobody talking and the microphone off yields all-zero
+// samples; ShaiNote would answer it with an empty Transcript and a Summary of nothing.
+const SILENCE_PEAK = 32; // about -60 dBFS
+function isSilent(chunks) {
+  return chunks.every((chunk) => chunk.every((sample) => sample <= SILENCE_PEAK && sample >= -SILENCE_PEAK));
+}
+
+function encodeWav(chunks, sampleRate) {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (sampleCount === 0) return null;
+  const header = new DataView(new ArrayBuffer(44));
+  const text = (offset, value) => [...value].forEach((char, index) => header.setUint8(offset + index, char.charCodeAt(0)));
+  text(0, "RIFF");
+  header.setUint32(4, 36 + sampleCount * 2, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  header.setUint32(16, 16, true); // PCM chunk size
+  header.setUint16(20, 1, true); // PCM
+  header.setUint16(22, 1, true); // mono
+  header.setUint32(24, sampleRate, true);
+  header.setUint32(28, sampleRate * 2, true); // byte rate
+  header.setUint16(32, 2, true); // block align
+  header.setUint16(34, 16, true); // bits per sample
+  text(36, "data");
+  header.setUint32(40, sampleCount * 2, true);
+  // Typed arrays are little-endian on every platform Chrome runs on, as WAV expects.
+  return new Blob([header, ...chunks], { type: "audio/wav" });
+}
+
+// Hands the Meeting Audio to the worker through IndexedDB; Transcription
+// decides whether it is worth sending.
+async function keepMeetingAudio(startedAt) {
+  const durationMs = startedAt === null ? 0 : Date.now() - startedAt;
+  let meetingAudio = null;
+  try {
+    meetingAudio = await stopMeetingAudioCapture();
+  } catch (error) {
+    console.error("[GMR][OFFSCREEN] Meeting Audio capture stop failed:", error);
+  }
+  const localId = crypto.randomUUID();
+  const silent = meetingAudio?.silent === true;
+  let stored = false;
+  // Silent audio is never sent, so there is nothing to keep for it.
+  if (meetingAudio && !silent) {
+    try {
+      await GMRMeetingAudioStore.put(localId, meetingAudio.wav);
+      stored = true;
+    } catch (error) {
+      console.error("[GMR][OFFSCREEN] Meeting Audio could not be kept:", error);
+    }
+  }
+  console.log("[GMR][OFFSCREEN] Meeting Audio kept:", { stored, silent, size: meetingAudio?.wav.size, durationMs });
+  return { localId, durationMs, stored, silent };
 }
 
 async function stopMediaRecorder() {
@@ -96,16 +197,20 @@ async function finishRecording() {
   let stage = "recorder-stop";
   try {
     if (!pendingRecording) {
+      const startedAt = recordingStartedAt;
       const { blob, chunkCount } = await stopMediaRecorder();
       stage = "recording-blob";
       if (!blob) throw new Error("No recording available to save");
+      const transcription = recordingSettings.transcriptionEnabled
+        ? await keepMeetingAudio(startedAt) : null;
       const blobUrl = URL.createObjectURL(blob);
       console.log("[GMR][OFFSCREEN] Blob URL created for download");
       pendingRecording = {
         ok: true, stage: "recording-ready-to-save",
         message: "Recording stopped and ready to save",
         blobUrl, blobSize: blob.size, mimeType: blob.type, chunkCount,
-        settings: { ...recordingSettings }
+        settings: { ...recordingSettings },
+        transcription
       };
     }
     stage = "audio-cleanup";
@@ -121,6 +226,7 @@ async function finishRecording() {
     console.error("[GMR][OFFSCREEN] recording stop failure stage:", stage);
     let state = "capturing";
     try {
+      await stopMeetingAudioCapture().catch(() => {});
       await cleanupAudioResources();
       if (!pendingRecording) state = "idle";
       mediaRecorder = null;
@@ -409,7 +515,8 @@ async function prepareCapture(streamId, suppliedSettings = {}) {
     recordingMode: suppliedSettings?.recordingMode === "audio-video" ? "audio-video" : "audio",
     microphoneEnabled: suppliedSettings?.microphoneEnabled !== false,
     saveMode: ["downloads", "ask", "selected-folder"].includes(suppliedSettings?.saveMode)
-      ? suppliedSettings.saveMode : "downloads"
+      ? suppliedSettings.saveMode : "downloads",
+    transcriptionEnabled: suppliedSettings?.transcriptionEnabled === true
   };
   if (stopRecordingPending || pendingRecording) {
     return { ok: false, stage: "capture-state", state: "capturing", message: "Previous recording is awaiting save" };
@@ -457,6 +564,14 @@ async function prepareCapture(streamId, suppliedSettings = {}) {
     console.log("[GMR][OFFSCREEN] starting MediaRecorder");
     mediaRecorder.start(1000);
     recordingStartedAt = Date.now();
+    if (settings.transcriptionEnabled) {
+      try {
+        await startMeetingAudioCapture();
+      } catch (error) {
+        // The Recording matters more than its Transcription: keep recording without it.
+        console.error("[GMR][OFFSCREEN] Meeting Audio capture failed to start:", error);
+      }
+    }
     console.log("[GMR][OFFSCREEN] MediaRecorder started");
     console.log("[GMR][OFFSCREEN] MediaRecorder state:", mediaRecorder.state);
     return {
@@ -542,55 +657,101 @@ async function saveToSelectedFolder(blobUrl, filename) {
   if (pendingRecording.folderSaved) return { ok: true, stage: "saved-selected-folder" };
   if (folderWriteOperation) return folderWriteOperation;
   folderWriteOperation = (async () => {
-    let writable = null;
-    try {
-      if (typeof FileSystemDirectoryHandle === "undefined") {
-        return { ok: false, stage: "folder-capability", message: "Directory API unavailable" };
-      }
-      const handle = await getSelectedDirectoryHandle();
-      if (!handle || typeof handle.getFileHandle !== "function") {
-        return { ok: false, stage: "folder-handle", message: "Selected directory unavailable" };
-      }
-      console.log("[GMR][OFFSCREEN] selected directory handle loaded");
-      const permission = await handle.queryPermission({ mode: "readwrite" });
-      console.log("[GMR][OFFSCREEN] selected folder permission:", permission);
-      if (permission !== "granted") {
-        console.warn("[GMR][OFFSCREEN] selected folder permission unavailable");
-        return { ok: false, stage: "folder-permission", message: "Selected folder permission is not granted" };
-      }
-      // Minute-resolution filenames can collide: never overwrite an earlier recording.
-      try {
-        await handle.getFileHandle(filename);
-        return { ok: false, stage: "folder-conflict", message: "Recording filename already exists" };
-      } catch (error) {
-        if (error?.name !== "NotFoundError") throw error;
-      }
+    const result = await writeFileToSelectedFolder(filename, async () => {
       const response = await fetch(blobUrl);
       if (!response.ok) throw new Error("Recording Blob unavailable");
-      const blob = await response.blob();
-      const fileHandle = await handle.getFileHandle(filename, { create: true });
-      if (typeof fileHandle.createWritable !== "function") {
-        return { ok: false, stage: "folder-capability", message: "Writable file API unavailable" };
-      }
-      console.log("[GMR][OFFSCREEN] writing recording file:", filename);
-      writable = await fileHandle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      writable = null;
-      pendingRecording.folderSaved = true;
-      console.log("[GMR][OFFSCREEN] recording saved to selected folder");
-      return { ok: true, stage: "saved-selected-folder" };
-    } catch (error) {
-      if (writable) {
-        try { await writable.abort(); }
-        catch (abortError) { console.error("[GMR][OFFSCREEN] folder write abort failed:", abortError?.name); }
-      }
-      console.error("[GMR][OFFSCREEN] selected folder save failed:", error?.name);
-      return { ok: false, stage: "folder-write", message: "Could not write recording to selected folder" };
-    }
+      return await response.blob();
+    });
+    if (result.ok) pendingRecording.folderSaved = true;
+    return result;
   })();
   try { return await folderWriteOperation; }
   finally { folderWriteOperation = null; }
+}
+
+async function writeFileToSelectedFolder(filename, readBlob) {
+  let writable = null;
+  try {
+    if (typeof FileSystemDirectoryHandle === "undefined") {
+      return { ok: false, stage: "folder-capability", message: "Directory API unavailable" };
+    }
+    const handle = await getSelectedDirectoryHandle();
+    if (!handle || typeof handle.getFileHandle !== "function") {
+      return { ok: false, stage: "folder-handle", message: "Selected directory unavailable" };
+    }
+    console.log("[GMR][OFFSCREEN] selected directory handle loaded");
+    const permission = await handle.queryPermission({ mode: "readwrite" });
+    console.log("[GMR][OFFSCREEN] selected folder permission:", permission);
+    if (permission !== "granted") {
+      console.warn("[GMR][OFFSCREEN] selected folder permission unavailable");
+      return { ok: false, stage: "folder-permission", message: "Selected folder permission is not granted" };
+    }
+    // Minute-resolution filenames can collide: never overwrite an earlier file.
+    try {
+      await handle.getFileHandle(filename);
+      return { ok: false, stage: "folder-conflict", message: "Filename already exists" };
+    } catch (error) {
+      if (error?.name !== "NotFoundError") throw error;
+    }
+    const blob = await readBlob();
+    const fileHandle = await handle.getFileHandle(filename, { create: true });
+    if (typeof fileHandle.createWritable !== "function") {
+      return { ok: false, stage: "folder-capability", message: "Writable file API unavailable" };
+    }
+    console.log("[GMR][OFFSCREEN] writing file:", filename);
+    writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    writable = null;
+    console.log("[GMR][OFFSCREEN] file saved to selected folder");
+    return { ok: true, stage: "saved-selected-folder" };
+  } catch (error) {
+    if (writable) {
+      try { await writable.abort(); }
+      catch (abortError) { console.error("[GMR][OFFSCREEN] folder write abort failed:", abortError?.name); }
+    }
+    console.error("[GMR][OFFSCREEN] selected folder save failed:", error?.name);
+    return { ok: false, stage: "folder-write", message: "Could not write file to selected folder" };
+  }
+}
+
+function writeDocumentToSelectedFolder(filename, base64) {
+  if (typeof filename !== "string" || typeof base64 !== "string" ||
+      !/^(?:Meet|Teams|Zoom)_[^/\\]+_(?:transcript|summary)\.pdf$/.test(filename)) {
+    return Promise.resolve({ ok: false, stage: "folder-validation", message: "Invalid document" });
+  }
+  return writeFileToSelectedFolder(filename, async () => {
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    return new Blob([bytes], { type: "application/pdf" });
+  });
+}
+
+// Fire-and-forget: the result travels back as its own message, because an
+// upload can outlive the worker's wait for a reply.
+async function uploadMeetingAudio({ localId, filename, url, accessToken }) {
+  uploadsInFlight.add(localId);
+  let result;
+  try {
+    const blob = await GMRMeetingAudioStore.get(localId);
+    if (!blob) {
+      result = { status: 0, missingAudio: true };
+    } else {
+      const form = new FormData();
+      form.append("file", blob, filename);
+      console.log("[GMR][OFFSCREEN] uploading Meeting Audio:", { localId, size: blob.size });
+      const response = await fetch(url, {
+        method: "POST", headers: { authorization: `Bearer ${accessToken}` }, body: form
+      });
+      result = { status: response.status, body: await response.json().catch(() => null) };
+    }
+  } catch (error) {
+    console.error("[GMR][OFFSCREEN] Meeting Audio upload failed:", error);
+    result = { networkError: error instanceof Error ? error.message : String(error) };
+  } finally {
+    uploadsInFlight.delete(localId);
+  }
+  console.log("[GMR][OFFSCREEN] Meeting Audio upload finished:", { localId, status: result.status });
+  await chrome.runtime.sendMessage({ type: "TRANSCRIPTION_UPLOAD_RESULT", localId, ...result });
 }
 
 function respondSafely(sendResponse, response) {
@@ -601,7 +762,37 @@ function respondSafely(sendResponse, response) {
   }
 }
 
+const SHAINOTE_UPLOAD_URL = "https://shainote.ai/api/v1/meetings/upload";
+const TRANSCRIPTION_MESSAGES = ["UPLOAD_MEETING_AUDIO", "GET_UPLOAD_STATUS", "WRITE_DOCUMENT_TO_FOLDER"];
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Meeting Audio, tokens and folder writes are for the worker only, never content scripts.
+  if (TRANSCRIPTION_MESSAGES.includes(message?.type) && !sender?.url?.startsWith(chrome.runtime.getURL(""))) {
+    return false;
+  }
+  if (message?.type === "UPLOAD_MEETING_AUDIO" && message?.target === "offscreen") {
+    if (message.url !== SHAINOTE_UPLOAD_URL) {
+      respondSafely(sendResponse, { ok: false, message: "Unexpected upload URL" });
+      return false;
+    }
+    if (!uploadsInFlight.has(message.localId)) {
+      uploadMeetingAudio(message).catch((error) => {
+        console.error("[GMR][OFFSCREEN] upload result could not be reported:", error);
+      });
+    }
+    respondSafely(sendResponse, { ok: true });
+    return false;
+  }
+  if (message?.type === "GET_UPLOAD_STATUS" && message?.target === "offscreen") {
+    respondSafely(sendResponse, { ok: true, inFlight: uploadsInFlight.has(message.localId) });
+    return false;
+  }
+  if (message?.type === "WRITE_DOCUMENT_TO_FOLDER" && message?.target === "offscreen") {
+    writeDocumentToSelectedFolder(message.filename, message.base64)
+      .then((response) => respondSafely(sendResponse, response))
+      .catch(() => respondSafely(sendResponse, { ok: false, stage: "folder-write" }));
+    return true;
+  }
   if (message?.type === "SAVE_TO_SELECTED_FOLDER" && message?.target === "offscreen") {
     console.log("[GMR][OFFSCREEN] SAVE_TO_SELECTED_FOLDER received");
     saveToSelectedFolder(message.blobUrl, message.filename)
@@ -670,7 +861,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[GMR][OFFSCREEN] recording settings received:", {
     recordingMode: message.settings?.recordingMode,
     microphoneEnabled: message.settings?.microphoneEnabled,
-    saveMode: message.settings?.saveMode
+    saveMode: message.settings?.saveMode,
+    transcriptionEnabled: message.settings?.transcriptionEnabled
   });
   if (!mediaRecorder && !pendingRecording && !hasActiveTabStream() && !prepareCapturePending) {
     recordingTabId = message.tabId ?? null;

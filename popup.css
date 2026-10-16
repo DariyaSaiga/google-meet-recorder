@@ -120,3 +120,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--green); out
 [data-screen="permission"] .action-area { min-height: 136px; }
 .saved-location, .recording-details { overflow-wrap: anywhere; }
 button:disabled { opacity: .65; }
+
+/* ShaiNote: account line, sign-in screen, Transcription toggle. */
+.account { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--muted); }
+#account-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signin-form { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+.signin-fields { display: grid; gap: 12px; }
+.field { display: grid; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.field input { min-height: 40px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+#signin-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+#signin-status.error { color: var(--red); }
+#signin-status:empty, #transcription-hint:empty { display: none; }
+.links { display: flex; justify-content: space-between; gap: 12px; }
+.links a { color: var(--green); font-size: 12px; }
+/* Sits closer to the microphone toggle so the signed-in popup still fits without scrolling. */
+.transcription-block { display: grid; gap: 8px; margin-top: -8px; }
