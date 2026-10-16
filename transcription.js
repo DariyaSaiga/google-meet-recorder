@@ -11,7 +11,7 @@
   const SIGN_IN_AGAIN = "Войдите в ShaiNote и нажмите «Повторить»";
   const TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
   const SUMMARY_TIMEOUT_MS = 30 * 60 * 1000;
-  const MAX_TRANSCRIPT_ATTEMPTS = 5;
+  const TRANSCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
   const MAX_RECORDS = 20;
 
   const UPLOAD_ERRORS = {
@@ -280,8 +280,8 @@
           record.transcript = "saved";
           await notify("Транскрипция готова", `${record.title}: ${filename}`);
         } else {
-          record.transcriptAttempts = (record.transcriptAttempts || 0) + 1;
-          if (record.transcriptAttempts >= MAX_TRANSCRIPT_ATTEMPTS) {
+          record.transcriptStatus = response.status;
+          if (now() - record.completedAt > TRANSCRIPT_TIMEOUT_MS) {
             record.transcript = "failed";
             await notify("Транскрипция недоступна", `${record.title}: откройте встречу на shainote.ai`);
           }

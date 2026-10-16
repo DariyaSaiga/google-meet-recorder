@@ -400,17 +400,26 @@ test("a network hiccup while following one Job doesn't stop the others", async (
   assert.ok(browser.downloads.some((d) => d.filename === "Meet_second_transcript.pdf"));
 });
 
-test("a Transcript ShaiNote can't deliver is reported as failed after a few attempts", async () => {
+test("a Transcript ShaiNote can't deliver keeps being retried for 10 minutes, then is reported as failed", async () => {
   const ctx = setup();
   const { shainote, browser, transcription } = ctx;
   const jobId = await completeJob(ctx);
   shainote.server.override = (method, path) => {
-    if (path === `/meetings/transcript/${jobId}`) return new Response("{}", { status: 500 });
+    if (path === `/meetings/transcript/${jobId}`) return new Response("{}", { status: 404 });
   };
 
-  for (let i = 0; i < 5; i += 1) await transcription.tick();
+  for (let i = 0; i < 20; i += 1) {
+    await transcription.tick();
+    browser.now += 5_000;
+  }
+  let [record] = await transcription.list();
+  assert.equal(record.transcript, "pending", "frequent polling alone doesn't give up");
+  assert.equal(record.transcriptStatus, 404, "the last answer from ShaiNote is kept");
 
-  const [record] = await transcription.list();
+  browser.now += 10 * 60_000;
+  await transcription.tick();
+
+  [record] = await transcription.list();
   assert.equal(record.transcript, "failed");
   assert.equal(browser.downloads.some((d) => d.filename.endsWith("_transcript.pdf")), false);
   assert.ok(browser.notifications.some((n) => n.title === "Транскрипция недоступна"));

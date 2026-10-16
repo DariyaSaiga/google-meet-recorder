@@ -494,6 +494,7 @@ async function stopAndSaveRecording(reason) {
 const PLATFORM_NAMES = { meet: "Google Meet", teams: "Microsoft Teams", zoom: "Zoom" };
 const TRANSCRIPTION_ALARM = "gmr-transcription-poll";
 const RETRY_NOTIFICATION_PREFIX = "gmr-retry:";
+const FAST_POLL_MS = 5000;
 
 function toBase64(bytes) {
   let binary = "";
@@ -529,7 +530,7 @@ const transcription = GMRTranscription.createTranscription({
   },
   notify: async (title, message, options) => {
     const notification = {
-      type: "basic", iconUrl: chrome.runtime.getURL("assets/cat-idle.png"), title, message
+      type: "basic", iconUrl: chrome.runtime.getURL("assets/shainote-icon.png"), title, message
     };
     if (options?.retryLocalId) {
       // The popup has no list of Transcriptions, so Retry lives on the notification.
@@ -564,14 +565,23 @@ const transcription = GMRTranscription.createTranscription({
   deleteMeetingAudio: (localId) => GMRMeetingAudioStore.delete(localId)
 });
 
-// Poll ShaiNote only while some Transcription is still waiting on it.
+// Poll ShaiNote only while some Transcription is still waiting on it: every few
+// seconds while the worker is awake, and through the alarm (30 s minimum) once
+// Chrome has suspended it.
+let fastPollTimer = null;
 async function syncTranscriptionPolling() {
   if (await transcription.needsPolling()) {
     if (!(await chrome.alarms.get(TRANSCRIPTION_ALARM))) {
       await chrome.alarms.create(TRANSCRIPTION_ALARM, { periodInMinutes: 0.5 });
     }
+    fastPollTimer ??= setTimeout(() => {
+      fastPollTimer = null;
+      resumeTranscription();
+    }, FAST_POLL_MS);
   } else {
     await chrome.alarms.clear(TRANSCRIPTION_ALARM);
+    clearTimeout(fastPollTimer);
+    fastPollTimer = null;
   }
 }
 
