@@ -4,16 +4,29 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Доступ к микрофону — ShaiNote Recorder</title>
+  <link rel="stylesheet" href="popup.css">
   <link rel="stylesheet" href="request-mic.css">
   <script src="request-mic.js" defer></script>
 </head>
 <body>
-  <main class="card">
-    <h1>Доступ к микрофону</h1>
-    <p>Разрешите доступ к микрофону, чтобы записывать ваш голос во время встречи.</p>
-    <button id="allow-microphone" type="button">♡ Разрешить микрофон</button>
-    <p id="permission-status" role="status" aria-live="polite">Требуется разрешение на использование микрофона</p>
-    <p class="hint">После предоставления доступа вкладка закроется автоматически.</p>
+  <main class="app-shell" data-screen="permission">
+    <header class="app-header">
+      <span class="brand-mark"><img class="icon" src="assets/ui/audio-lines.svg" alt="" aria-hidden="true"></span>
+      <div class="brand">ShaiNote<small>Recorder</small></div>
+    </header>
+    <section class="screen">
+      <div><h1>Разрешите запись голоса</h1><p class="subtitle">Доступ нужен только для записи вашего голоса.</p></div>
+      <div class="permission-mic">
+        <div class="toggle-row"><span class="icon-label"><img class="icon" src="assets/ui/mic.svg" alt="" aria-hidden="true">Мой микрофон</span><input id="permission-microphone-enabled" type="checkbox" role="switch" aria-label="Мой микрофон" checked></div>
+        <p id="permission-status" class="status-line warning" role="status" aria-live="polite">Доступ не разрешён</p>
+      </div>
+      <div class="recovery"><strong>Ранее запретили доступ?</strong><p>Разрешите микрофон в настройках браузера, затем повторите запрос.</p><p>Можно продолжить без микрофона. Звук вкладки при этом не отключается.</p></div>
+    </section>
+    <footer class="action-area">
+      <button id="allow-microphone" class="primary-button" type="button">Разрешить микрофон</button>
+      <button id="continue-without-microphone" class="secondary-button" type="button" aria-describedby="without-mic-help">Продолжить без микрофона</button>
+      <p id="without-mic-help" class="sr-only">Микрофон будет выключен в настройках; звук вкладки останется доступен.</p>
+    </footer>
   </main>
 </body>
 </html>

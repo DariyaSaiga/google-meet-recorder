@@ -47,7 +47,7 @@ allowButton.addEventListener("click", async () => {
       console.log("[GMR][MIC-PERMISSION] microphone test stream stopped");
     }
     permissionStatus.textContent = "Доступ разрешён. Можно вернуться во встречу.";
-    allowButton.textContent = "♡ Доступ разрешён";
+    allowButton.textContent = "Доступ разрешён";
     closePermissionPage(1200);
   } catch (error) {
     console.error("[GMR][MIC-PERMISSION] microphone request failed:", error);
@@ -70,7 +70,7 @@ async function checkCurrentPermission() {
     if (userRequestStarted) return;
     if (result.state === "granted") {
       permissionStatus.textContent = "Доступ к микрофону уже разрешён";
-      allowButton.textContent = "♡ Микрофон готов";
+      allowButton.textContent = "Микрофон готов";
       allowButton.disabled = true;
       closePermissionPage(1000);
     } else if (result.state === "denied") {
@@ -82,3 +82,26 @@ async function checkCurrentPermission() {
 }
 
 checkCurrentPermission();
+
+// UI alternative to permission: update the same setting used by the recorder.
+document.getElementById("continue-without-microphone").addEventListener("click", async (event) => {
+  if (requestPending) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const { gmrSettings = {} } = await chrome.storage.local.get("gmrSettings");
+    await chrome.storage.local.set({ gmrSettings: { ...gmrSettings, microphoneEnabled: false } });
+    const url = new URL(chrome.runtime.getURL("popup.html"));
+    const meetingTabId = new URL(location.href).searchParams.get("meetingTabId");
+    if (meetingTabId && /^\d+$/.test(meetingTabId)) url.searchParams.set("meetingTabId", meetingTabId);
+    window.location.href = url.href;
+  } catch (error) {
+    permissionStatus.textContent = "Не удалось сохранить настройки. Попробуйте ещё раз.";
+    button.disabled = false;
+  }
+});
+
+document.getElementById("permission-microphone-enabled").addEventListener("change", (event) => {
+  if (requestPending) { event.target.checked = true; return; }
+  if (!event.target.checked) document.getElementById("continue-without-microphone").click();
+});
