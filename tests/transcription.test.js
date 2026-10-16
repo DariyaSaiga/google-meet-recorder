@@ -48,6 +48,10 @@ test("a saved Recording ends with its Transcript and Summary saved next to it", 
     meetingUrl: "https://meet.google.com/abc-defg-hij"
   });
   assert.equal(browser.meetingAudio.has("rec-1"), false, "Meeting Audio is dropped once ShaiNote accepts it");
+  assert.deepEqual(browser.notifications, [{
+    title: "Аудио отправлено в ShaiNote",
+    message: "Google Meet abc-defg-hij · 2026-10-15 18:30: транскрипция и сводка сохранятся рядом с записью"
+  }], "the user sees that the Recording is on its way");
 
   shainote.server.jobs.get(jobId).status = "transcribing";
   await transcription.tick();
@@ -62,7 +66,7 @@ test("a saved Recording ends with its Transcript and Summary saved next to it", 
     { filename: "Meet_abc-defg-hij_2026-10-15_18-30_transcript.pdf", text: `%PDF transcript ${jobId} pdf` },
     { filename: "Meet_abc-defg-hij_2026-10-15_18-30_summary.pdf", text: "%PDF summary s-auto pdf" }
   ]);
-  assert.deepEqual(browser.notifications.map((n) => n.title), ["Транскрипция готова", "Сводка готова"]);
+  assert.deepEqual(browser.notifications.map((n) => n.title), ["Аудио отправлено в ShaiNote", "Транскрипция готова", "Сводка готова"]);
   const [record] = await transcription.list();
   assert.equal(record.transcript, "saved");
   assert.equal(record.summary, "saved");
@@ -80,6 +84,11 @@ test("a Recording under 30 seconds is not sent and shows as too short", async ()
   assert.equal(browser.meetingAudio.has("rec-1"), false);
   const [record] = await transcription.list();
   assert.equal(record.state, "too-short");
+  assert.equal(record.durationMs, 29_000);
+  assert.deepEqual(browser.notifications, [{
+    title: "Транскрипция не создана",
+    message: "Google Meet abc-defg-hij · 2026-10-15 18:30: запись короче 30 секунд"
+  }], "a skipped Recording is never silent");
   assert.equal(await transcription.needsPolling(), false);
 });
 

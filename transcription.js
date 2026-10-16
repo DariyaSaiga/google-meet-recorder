@@ -150,6 +150,7 @@
         title: recording.title,
         meetingUrl: recording.meetingUrl,
         saveMode: recording.saveMode,
+        durationMs: recording.durationMs,
         createdAt: now(),
         updatedAt: now(),
         state: "uploading",
@@ -171,8 +172,13 @@
         await deps.deleteMeetingAudio(dropped.localId);
       }
       await saveRecords(records);
-      if (record.state === "too-short") await deps.deleteMeetingAudio(record.localId);
-      else await startUpload(record);
+      if (record.state === "too-short") {
+        await deps.deleteMeetingAudio(record.localId);
+        // The popup has no list, so a skipped Recording must still say so.
+        await notify("Транскрипция не создана", `${record.title}: запись короче 30 секунд`);
+      } else {
+        await startUpload(record);
+      }
     }
 
     async function startUpload(record, accessToken) {
@@ -225,9 +231,10 @@
         await failUpload(result.localId, describeUploadError(result));
         return;
       }
-      await updateRecord(result.localId, { state: "processing", jobId, error: null });
-      const record = (await loadRecords()).find((item) => item.localId === result.localId);
+      const record = await updateRecord(result.localId, { state: "processing", jobId, error: null });
       await deps.deleteMeetingAudio(result.localId);
+      if (!record) return;
+      await notify("Аудио отправлено в ShaiNote", `${record.title}: транскрипция и сводка сохранятся рядом с записью`);
       try {
         await api(`/meetings/${jobId}`, {
           method: "PUT",
