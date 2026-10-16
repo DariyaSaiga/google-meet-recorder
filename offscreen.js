@@ -100,7 +100,15 @@ async function stopMeetingAudioCapture() {
   ]);
   capture.source.disconnect();
   await capture.context.close().catch(() => {});
-  return encodeWav(capture.chunks, capture.context.sampleRate);
+  const wav = encodeWav(capture.chunks, capture.context.sampleRate);
+  return wav && { wav, silent: isSilent(capture.chunks) };
+}
+
+// A meeting tab with nobody talking and the microphone off yields all-zero
+// samples; ShaiNote would answer it with an empty Transcript and a Summary of nothing.
+const SILENCE_PEAK = 32; // about -60 dBFS
+function isSilent(chunks) {
+  return chunks.every((chunk) => chunk.every((sample) => sample <= SILENCE_PEAK && sample >= -SILENCE_PEAK));
 }
 
 function encodeWav(chunks, sampleRate) {
@@ -136,17 +144,19 @@ async function keepMeetingAudio(startedAt) {
     console.error("[GMR][OFFSCREEN] Meeting Audio capture stop failed:", error);
   }
   const localId = crypto.randomUUID();
+  const silent = meetingAudio?.silent === true;
   let stored = false;
-  if (meetingAudio) {
+  // Silent audio is never sent, so there is nothing to keep for it.
+  if (meetingAudio && !silent) {
     try {
-      await GMRMeetingAudioStore.put(localId, meetingAudio);
+      await GMRMeetingAudioStore.put(localId, meetingAudio.wav);
       stored = true;
     } catch (error) {
       console.error("[GMR][OFFSCREEN] Meeting Audio could not be kept:", error);
     }
   }
-  console.log("[GMR][OFFSCREEN] Meeting Audio kept:", { stored, size: meetingAudio?.size, durationMs });
-  return { localId, durationMs, stored };
+  console.log("[GMR][OFFSCREEN] Meeting Audio kept:", { stored, silent, size: meetingAudio?.wav.size, durationMs });
+  return { localId, durationMs, stored, silent };
 }
 
 async function stopMediaRecorder() {

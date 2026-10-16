@@ -607,14 +607,17 @@ async function handOffToTranscription(kept, recordingUrl, filename, saveMode) {
   } catch {
     // Without a URL the meeting simply has no link on shainote.ai.
   }
-  console.log("[GMR][SW] handing Recording to Transcription:", { localId: kept.localId, durationMs: kept.durationMs });
+  console.log("[GMR][SW] handing Recording to Transcription:", {
+    localId: kept.localId, durationMs: kept.durationMs, silent: kept.silent
+  });
   await runTranscription(() => transcription.recordingSaved({
     localId: kept.localId,
     recordingName: filename.replace(/\.webm$/, ""),
     title: `${PLATFORM_NAMES[identity?.platform] || "Встреча"}${meetingId} · ${stamp}`,
     meetingUrl,
     saveMode,
-    durationMs: kept.durationMs
+    durationMs: kept.durationMs,
+    silent: kept.silent === true
   }));
 }
 

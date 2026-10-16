@@ -425,6 +425,61 @@ test("a Transcript ShaiNote can't deliver keeps being retried for 10 minutes, th
   assert.ok(browser.notifications.some((n) => n.title === "Транскрипция недоступна"));
 });
 
+test("a silent Recording is not sent, and says there was no sound", async () => {
+  const { browser, transcription } = setup();
+  await transcription.signIn("me@example.com", "secret");
+  browser.meetingAudio.add("rec-1");
+
+  await transcription.recordingSaved({ ...RECORDING, silent: true });
+
+  assert.equal(browser.uploadRequests.length, 0);
+  assert.equal(browser.meetingAudio.has("rec-1"), false);
+  assert.equal((await transcription.list())[0].state, "silent");
+  assert.deepEqual(browser.notifications, [{
+    title: "Транскрипция не создана",
+    message: "Google Meet abc-defg-hij · 2026-10-15 18:30: в записи нет звука, аудио не отправлено"
+  }]);
+  assert.equal(await transcription.needsPolling(), false);
+});
+
+test("a Job in which ShaiNote heard no speech is reported at once, without an empty Summary", async () => {
+  const ctx = setup();
+  const { shainote, browser, transcription } = ctx;
+  const jobId = await completeJob(ctx);
+  shainote.server.jobs.get(jobId).transcript = [];
+  shainote.server.summaries.set("s-auto", { jobId, status: "completed", hasPdf: true });
+
+  await transcription.tick();
+
+  const [record] = await transcription.list();
+  assert.equal(record.transcript, "failed");
+  assert.equal(record.summary, "failed");
+  assert.equal(record.noSpeech, true);
+  assert.equal(browser.downloads.length, 0, "the Summary of nothing is not saved");
+  assert.deepEqual(browser.notifications.at(-1), {
+    title: "Речь не распознана",
+    message: "Google Meet abc-defg-hij · 2026-10-15 18:30: ShaiNote не нашёл речи в записи, транскрипция и сводка не созданы"
+  });
+  assert.equal(await transcription.needsPolling(), false);
+});
+
+test("a Transcript that isn't downloadable yet while the meeting has text is waited for", async () => {
+  const ctx = setup();
+  const { shainote, browser, transcription } = ctx;
+  const jobId = await completeJob(ctx);
+  let ready = false;
+  shainote.server.override = (method, path) => {
+    if (!ready && path === `/meetings/transcript/${jobId}`) return new Response("{}", { status: 404 });
+  };
+
+  await transcription.tick();
+  assert.equal((await transcription.list())[0].transcript, "pending");
+
+  ready = true;
+  await transcription.tick();
+  assert.equal(browser.downloads[0].filename, "Meet_abc-defg-hij_2026-10-15_18-30_transcript.pdf");
+});
+
 test("failing to set the meeting title on ShaiNote doesn't stop the Job", async () => {
   const ctx = setup();
   const { shainote, transcription } = ctx;

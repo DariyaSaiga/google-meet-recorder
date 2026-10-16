@@ -9,6 +9,7 @@
   const AUTH_KEY = "gmrAuth";
   const MIN_DURATION_MS = 30 * 1000;
   const SIGN_IN_AGAIN = "Войдите в ShaiNote и нажмите «Повторить»";
+  const NO_SPEECH = "Речь не распознана";
   const TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
   const SUMMARY_TIMEOUT_MS = 30 * 60 * 1000;
   const TRANSCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -162,6 +163,7 @@
         error: null
       };
       if (!(recording.durationMs >= MIN_DURATION_MS)) record.state = "too-short";
+      else if (recording.silent) record.state = "silent";
       const records = await loadRecords();
       records.unshift(record);
       // Keep the list short: drop the oldest finished entries beyond the cap.
@@ -176,6 +178,9 @@
         await deps.deleteMeetingAudio(record.localId);
         // The popup has no list, so a skipped Recording must still say so.
         await notify("Транскрипция не создана", `${record.title}: запись короче 30 секунд`);
+      } else if (record.state === "silent") {
+        await deps.deleteMeetingAudio(record.localId);
+        await notify("Транскрипция не создана", `${record.title}: в записи нет звука, аудио не отправлено`);
       } else {
         await startUpload(record);
       }
@@ -274,22 +279,43 @@
         }
       }
       if (record.state === "completed" && record.transcript === "pending") {
-        const response = await api(`/meetings/transcript/${record.jobId}?format=pdf`);
-        if (response.ok) {
-          const filename = await saveDocument(record, "transcript", response);
-          record.transcript = "saved";
-          await notify("Транскрипция готова", `${record.title}: ${filename}`);
-        } else {
-          record.transcriptStatus = response.status;
-          if (now() - record.completedAt > TRANSCRIPT_TIMEOUT_MS) {
-            record.transcript = "failed";
-            await notify("Транскрипция недоступна", `${record.title}: откройте встречу на shainote.ai`);
-          }
-        }
+        await advanceTranscript(record);
       }
       if (record.state === "completed" && ["pending", "waiting"].includes(record.summary)) {
         await advanceSummary(record);
       }
+    }
+
+    async function advanceTranscript(record) {
+      const response = await api(`/meetings/transcript/${record.jobId}?format=pdf`);
+      if (response.ok) {
+        const filename = await saveDocument(record, "transcript", response);
+        record.transcript = "saved";
+        await notify("Транскрипция готова", `${record.title}: ${filename}`);
+        return;
+      }
+      record.transcriptStatus = response.status;
+      if (await heardNoSpeech(record)) {
+        // The Summary of an empty Transcript only says there was nothing to summarize.
+        record.transcript = "failed";
+        record.summary = "failed";
+        record.noSpeech = true;
+        await notify(NO_SPEECH, `${record.title}: ShaiNote не нашёл речи в записи, транскрипция и сводка не созданы`);
+        return;
+      }
+      if (now() - record.completedAt > TRANSCRIPT_TIMEOUT_MS) {
+        record.transcript = "failed";
+        await notify("Транскрипция недоступна", `${record.title}: откройте встречу на shainote.ai`);
+      }
+    }
+
+    // A completed Job with no speech answers the Transcript download with 404
+    // "Transcript not ready" forever; its meeting shows an empty transcript_content.
+    async function heardNoSpeech(record) {
+      const response = await api(`/meetings/${record.jobId}`);
+      if (!response.ok) return false;
+      const { transcript_content: content } = await response.json();
+      return Array.isArray(content) ? content.length === 0 : content === "";
     }
 
     // A Job may or may not come with a Summary: use ShaiNote's own, else request one.

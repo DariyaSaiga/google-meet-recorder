@@ -59,7 +59,8 @@ The local Recording is always saved first and never depends on ShaiNote. Chrome 
   - Upload: `POST /meetings/upload` (multipart `file`), which returns `job_id`.
   - Meeting details: `PUT /meetings/{job_id}` with `{title, meeting_url}`.
   - Job status: `GET /meetings/status/{job_id}`.
-  - Transcript: `GET /meetings/transcript/{job_id}?format=pdf`.
+  - Transcript: `GET /meetings/transcript/{job_id}?format=pdf`. The OpenAPI declares no response body; in practice it is `application/pdf`, or 404 `{"detail": "Transcript not ready"}`.
+  - No-speech check: `GET /meetings/{job_id}`. A completed Job whose `transcript_content` is `[]` heard no speech, and its Transcript download stays 404.
   - List summaries: `GET /meeting-summaries?meeting_job_id=`.
   - Request a summary: `POST /meeting-summaries?meeting_job_id=` (default template).
   - Summary status: `GET /meeting-summaries/{id}`.

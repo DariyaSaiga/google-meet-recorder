@@ -4,6 +4,10 @@
 // Transcription module is given.
 
 const BASE = "https://shainote.ai/api/v1";
+// transcript_content as the real ShaiNote returns it, unless a test sets job.transcript.
+const DEFAULT_TRANSCRIPT = [
+  { text: "Добрый день", speaker: "speaker_0", timestamp_start: 0.28, timestamp_end: 1.9, timestamp_str: "[00:00:00]" }
+];
 
 function json(status, body) {
   return new Response(JSON.stringify(body), {
@@ -94,7 +98,10 @@ function createFakeShaiNote() {
     }
     if (method === "GET" && (match = path.match(/^\/meetings\/transcript\/([^/]+)$/))) {
       const job = server.jobs.get(match[1]);
-      if (!job || job.status !== "completed") return json(404, { status: "not_found", status_code: 404, detail: "No transcript" });
+      // What the real ShaiNote answers before the Job completes and when it heard no speech.
+      if (!job || job.status !== "completed" || (job.transcript ?? DEFAULT_TRANSCRIPT).length === 0) {
+        return json(404, { detail: "Transcript not ready", status: "not_found", status_code: 404 });
+      }
       return pdf(`transcript ${match[1]} ${url.searchParams.get("format")}`);
     }
     if (method === "GET" && path === "/meeting-summaries") {
@@ -119,6 +126,15 @@ function createFakeShaiNote() {
       const summary = server.summaries.get(url.searchParams.get("summary_id"));
       if (!summary || summary.status !== "completed") return json(404, { status: "not_found", status_code: 404, detail: "No summary" });
       return pdf(`summary ${url.searchParams.get("summary_id")} ${url.searchParams.get("format")}`);
+    }
+    if (method === "GET" && (match = path.match(/^\/meetings\/([^/]+)$/))) {
+      const job = server.jobs.get(match[1]);
+      if (!job) return json(404, { status: "not_found", status_code: 404, detail: "Not found" });
+      const completed = job.status === "completed";
+      return json(200, {
+        job_id: match[1], status: job.status, title: job.title ?? null,
+        transcript_content: completed ? job.transcript ?? DEFAULT_TRANSCRIPT : null
+      });
     }
     return json(404, { detail: `no fake route for ${method} ${path}` });
   }
