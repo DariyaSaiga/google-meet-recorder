@@ -723,8 +723,19 @@ function respondSafely(sendResponse, response) {
   }
 }
 
+const SHAINOTE_UPLOAD_URL = "https://shainote.ai/api/v1/meetings/upload";
+const TRANSCRIPTION_MESSAGES = ["UPLOAD_MEETING_AUDIO", "GET_UPLOAD_STATUS", "WRITE_DOCUMENT_TO_FOLDER"];
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Meeting Audio, tokens and folder writes are for the worker only, never content scripts.
+  if (TRANSCRIPTION_MESSAGES.includes(message?.type) && !sender?.url?.startsWith(chrome.runtime.getURL(""))) {
+    return false;
+  }
   if (message?.type === "UPLOAD_MEETING_AUDIO" && message?.target === "offscreen") {
+    if (message.url !== SHAINOTE_UPLOAD_URL) {
+      respondSafely(sendResponse, { ok: false, message: "Unexpected upload URL" });
+      return false;
+    }
     if (!uploadsInFlight.has(message.localId)) {
       uploadMeetingAudio(message).catch((error) => {
         console.error("[GMR][OFFSCREEN] upload result could not be reported:", error);

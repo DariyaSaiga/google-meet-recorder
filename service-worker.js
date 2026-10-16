@@ -2,6 +2,10 @@
 
 importScripts("meeting-audio-store.js", "transcription.js");
 
+// ShaiNote tokens live in storage.local: keep it out of content scripts' reach.
+chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
+  .catch((error) => console.error("[GMR][SW] storage access level not set:", error));
+
 console.log("[GMR][SW] service worker loaded");
 
 // Allowed states: idle, starting, capturing, stopping (reserved for STOP).
@@ -777,6 +781,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (typeof message?.type === "string" && message.type.startsWith("TRANSCRIPTION_")) {
       // Only extension pages (popup, offscreen) may drive Transcription, never content scripts.
       if (!sender?.url?.startsWith(chrome.runtime.getURL(""))) return false;
+      if (message.type === "TRANSCRIPTION_UPLOAD_RESULT" && sender.url !== chrome.runtime.getURL("offscreen.html")) return false;
       handleTranscriptionMessage(message)
         .then((response) => respondSafely(sendResponse, response))
         .catch((error) => {
