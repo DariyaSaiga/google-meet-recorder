@@ -3,46 +3,103 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Настройки — ShaiNote Recorder</title>
+  <title>ShaiNote Recorder</title>
   <link rel="stylesheet" href="popup.css">
   <script src="popup.js" defer></script>
 </head>
 <body>
-  <main>
-    <header>
-      <h1>ShaiNote Recorder</h1>
-      <p>Настройки записи</p>
+  <main class="app-shell" data-screen="new">
+    <header class="app-header">
+      <span class="brand-mark"><img class="icon" src="assets/ui/audio-lines.svg" alt="" aria-hidden="true"></span>
+      <button id="back-arrow" class="icon-button" type="button" aria-label="Назад к записи" hidden><img class="icon" src="assets/ui/arrow-left.svg" alt="" aria-hidden="true"></button>
+      <div class="brand">ShaiNote<small>Recorder</small></div>
+      <button id="back-to-recording" class="text-button back-label" type="button" hidden>Назад к записи</button>
     </header>
     <form id="settings-form">
       <fieldset id="settings-controls" disabled>
-        <fieldset class="card">
-          <legend>Режим записи</legend>
-          <div class="segmented-control">
-            <label><input type="radio" name="recordingMode" value="audio" checked><span>Только аудио</span></label>
-            <label><input type="radio" name="recordingMode" value="audio-video"><span>Аудио + видео</span></label>
+        <section id="new-recording" class="screen" aria-labelledby="new-title">
+          <h1 id="new-title" tabindex="-1">Новая запись</h1>
+          <div class="mode-block">
+            <fieldset class="mode-field">
+              <legend class="sr-only">Режим записи</legend>
+              <div class="segmented-control">
+                <label><input type="radio" name="recordingMode" value="audio" checked><span><img class="icon" src="assets/ui/audio-lines.svg" alt="" aria-hidden="true">Только аудио</span></label>
+                <label><input type="radio" name="recordingMode" value="audio-video"><span><img class="icon" src="assets/ui/video.svg" alt="" aria-hidden="true">Аудио + видео</span></label>
+              </div>
+            </fieldset>
+            <p class="muted">Нажмите «Начать запись», затем выберите вкладку, окно или экран.</p>
           </div>
-        </fieldset>
-        <section class="card" aria-labelledby="microphone-heading">
-          <h2 id="microphone-heading">Микрофон</h2>
-          <label class="toggle-row">Записывать мой микрофон <input id="microphone-enabled" name="microphoneEnabled" type="checkbox" role="switch" checked></label>
+          <div class="mic-block">
+            <label class="toggle-row" for="microphone-enabled"><span class="icon-label"><img class="icon" src="assets/ui/mic.svg" alt="" aria-hidden="true">Мой микрофон</span><input id="microphone-enabled" name="microphoneEnabled" type="checkbox" role="switch" checked></label>
+            <p id="mic-setting-summary" class="status-line"></p>
+            <div class="permission" hidden>
+              <p id="microphone-status" role="status" aria-live="polite">Проверяем доступ к микрофону</p>
+              <button id="enable-microphone" class="text-button" type="button">Разрешить микрофон</button>
+            </div>
+          </div>
+          <div class="save-summary">
+            <div class="section-heading"><span class="eyebrow">КУДА СОХРАНИТЬ</span><button id="edit-save-settings" class="text-button" type="button">Изменить →</button></div>
+            <div class="icon-row"><img class="icon" src="assets/ui/folder.svg" alt="" aria-hidden="true"><div><strong id="save-summary-title">Загрузки</strong><p id="save-summary-detail" class="muted"></p></div></div>
+          </div>
         </section>
-        <fieldset class="card">
-          <legend>Сохранение</legend>
-          <label><input type="radio" name="saveMode" value="downloads" checked> Загрузки автоматически</label>
-          <label><input type="radio" name="saveMode" value="ask"> Спрашивать каждый раз</label>
-          <label><input type="radio" name="saveMode" value="selected-folder"> Выбранная папка</label>
-          <p id="folder-status" role="status" aria-live="polite"></p>
-          <button id="choose-folder" type="button">Выбрать папку</button>
-          <button id="restore-folder-access" type="button" hidden>Разрешить доступ</button>
-        </fieldset>
+        <section id="save-settings" class="screen" aria-labelledby="save-title" hidden>
+          <div><h1 id="save-title" tabindex="-1">Куда сохранять запись?</h1><p class="subtitle">Выберите один вариант.</p></div>
+          <fieldset class="save-options">
+            <legend class="sr-only">Сохранение</legend>
+            <label><input type="radio" name="saveMode" value="downloads" checked><span><strong>В «Загрузки»</strong><small>Сохранять автоматически после остановки.</small></span></label>
+            <label><input type="radio" name="saveMode" value="ask"><span><strong>Выбирать каждый раз</strong><small>Перед сохранением указать имя и папку.</small></span></label>
+            <label><input type="radio" name="saveMode" value="selected-folder"><span><strong>В выбранную папку</strong><small>Все записи будут в этой папке.</small></span></label>
+            <div class="folder-details">
+              <div class="icon-row"><img class="icon" src="assets/ui/folder.svg" alt="" aria-hidden="true"><p id="folder-status" role="status" aria-live="polite"></p></div>
+              <button id="choose-folder" class="secondary-button" type="button">Выбрать другую папку</button>
+              <button id="restore-folder-access" class="secondary-button" type="button" hidden>Разрешить доступ</button>
+            </div>
+          </fieldset>
+        </section>
       </fieldset>
     </form>
-    <p id="settings-status" role="status" aria-live="polite">Загрузка настроек...</p>
-    <section class="card permission" aria-labelledby="permission-heading">
-      <h2 id="permission-heading">Доступ к микрофону</h2>
-      <p id="microphone-status" role="status" aria-live="polite">Разрешение на микрофон ещё не проверено</p>
-      <button id="enable-microphone" type="button">Разрешить микрофон</button>
+    <p id="settings-status" class="settings-status" role="status" aria-live="polite">Загрузка настроек...</p>
+    <footer class="action-area">
+      <div id="new-actions"><button id="start-recording" class="primary-button" type="button" disabled aria-describedby="start-help">Начать запись</button><p id="start-help">Запись сохранится на этом устройстве.</p></div>
+      <div id="save-actions" hidden><button id="save-settings-done" class="primary-button" type="button" title="Настройки сохраняются автоматически при изменении">Сохранить настройки</button></div>
+    </footer>
+    <div id="live-ui" hidden></div>
+    <p id="ui-error" role="alert" hidden></p>
+    <template id="recording-active-template">
+      <section class="screen recording-screen">
+        <div class="timer-panel"><span class="recording-label"><i class="recording-dot"></i>Идёт запись</span><time class="large-timer" hidden></time><img class="waveform" src="assets/ui/Аудиосигнал.svg" alt="" aria-hidden="true"></div>
+        <dl class="recording-details">
+          <div class="icon-row" hidden><img class="icon" src="assets/ui/video.svg" alt="" aria-hidden="true"><div><dt>Записывается</dt><dd data-recording-mode></dd></div></div>
+          <div class="icon-row" hidden><img class="icon" src="assets/ui/mic.svg" alt="" aria-hidden="true"><div><dt>Мой микрофон</dt><dd data-recording-mic></dd></div></div>
+          <div class="icon-row" hidden><img class="icon" src="assets/ui/folder.svg" alt="" aria-hidden="true"><div><dt>Папка для записи</dt><dd data-recording-folder></dd></div></div>
+        </dl>
+      </section>
+      <footer class="action-area"><button id="stop-recording" class="primary-button stop-button" type="button">Остановить и сохранить</button><p>Не закрывайте записываемую вкладку.</p></footer>
+    </template>
+    <template id="recording-saved-template">
+      <section class="screen saved-screen">
+        <span class="success-icon"><img class="icon" src="assets/ui/check.svg" alt="" aria-hidden="true"></span>
+        <div><h1>Запись сохранена</h1><p class="subtitle">Файл сохранён на этом устройстве.</p></div>
+        <div class="saved-file icon-row" hidden><img class="icon" src="assets/ui/file-video.svg" alt="" aria-hidden="true"><div><strong class="saved-filename"></strong><p class="saved-metadata muted" hidden></p></div></div>
+        <div class="saved-location" hidden><p class="muted">Где найти запись</p><div class="icon-row"><img class="icon" src="assets/ui/folder.svg" alt="" aria-hidden="true"><span data-saved-folder></span></div></div>
+      </section>
+      <footer class="action-area"><button id="new-recording-action" class="primary-button" type="button">Начать новую запись</button><p>Можно закрыть расширение.</p></footer>
+    </template>
+    <template id="permission-template">
+    <section class="screen">
+      <div><h1>Разрешите запись голоса</h1><p class="subtitle">Доступ нужен только для записи вашего голоса.</p></div>
+      <div class="permission-mic">
+        <div class="toggle-row"><span class="icon-label"><img class="icon" src="assets/ui/mic.svg" alt="" aria-hidden="true">Мой микрофон</span><input id="popup-permission-toggle" type="checkbox" role="switch" aria-label="Мой микрофон" checked></div>
+        <p id="popup-permission-status" class="status-line warning" role="status" aria-live="polite">Доступ не разрешён</p>
+      </div>
+      <div class="recovery"><strong>Ранее запретили доступ?</strong><p>Разрешите микрофон в настройках браузера, затем повторите запрос.</p><p>Можно продолжить без микрофона. Звук вкладки при этом не отключается.</p></div>
     </section>
+    <footer class="action-area">
+      <button id="popup-allow-microphone" class="primary-button" type="button">Разрешить микрофон</button>
+      <button id="popup-without-mic" class="secondary-button" type="button" >Продолжить без микрофона</button>
+
+    </footer>
+    </template>
   </main>
 </body>
 </html>

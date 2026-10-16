@@ -50,6 +50,103 @@ async function getRecordingSettings() {
   }
 }
 
+// UI metadata only. Capture authority remains captureState/offscreen, never storage.
+const UI_METADATA_KEY = "gmrUiMetadata";
+let uiMetadata = null;
+let uiMetadataLoaded = false;
+let uiWriteQueue = Promise.resolve();
+
+async function loadUiMetadata() {
+  if (!uiMetadataLoaded) {
+    const stored = await chrome.storage.session.get(UI_METADATA_KEY);
+    if (!uiMetadataLoaded) uiMetadata = stored[UI_METADATA_KEY] || null;
+    uiMetadataLoaded = true;
+  }
+  return uiMetadata;
+}
+
+async function readUiFolderName() {
+  try {
+    return await new Promise((resolve) => {
+      const request = indexedDB.open("GMRDatabase");
+      request.onerror = () => resolve(null);
+      request.onupgradeneeded = () => { request.transaction.abort(); resolve(null); };
+      request.onsuccess = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains("handles")) { db.close(); resolve(null); return; }
+        const tx = db.transaction("handles", "readonly");
+        const get = tx.objectStore("handles").get("selectedDirectory");
+        get.onsuccess = () => resolve(get.result?.name || null);
+        get.onerror = () => resolve(null);
+        tx.oncomplete = () => db.close();
+        tx.onabort = () => { db.close(); resolve(null); };
+      };
+    });
+  } catch { return null; }
+}
+
+async function uiSnapshot() {
+  await loadUiMetadata();
+  return {
+    captureState, tabId: activeCaptureTabId ?? uiMetadata?.tabId ?? null,
+    recording: captureState !== "idle" ? uiMetadata?.recording || null : null,
+    saved: captureState === "idle" ? uiMetadata?.saved || null : null,
+    error: uiMetadata?.error || null
+  };
+}
+
+async function publishUiState() {
+  try {
+    const state = await uiSnapshot();
+    await chrome.runtime.sendMessage({ type: "UI_STATE_UPDATED", state }).catch(() => {});
+    if (Number.isInteger(state.tabId)) {
+      const frame = uiMetadata?.zoomFrame;
+      const options = frame?.documentId ? { documentId: frame.documentId }
+        : Number.isInteger(frame?.frameId) ? { frameId: frame.frameId } : {};
+      await chrome.tabs.sendMessage(state.tabId, { type: "UI_STATE_UPDATED", state }, options).catch(() => {});
+    }
+  } catch (error) { console.warn("[GMR][SW] UI notification unavailable", error); }
+}
+
+async function updateUiMetadata(patch) {
+  // A UI/storage failure must never fail a recording operation.
+  try {
+    await loadUiMetadata();
+    uiMetadata = { ...uiMetadata, ...patch };
+    const value = structuredClone(uiMetadata);
+    uiWriteQueue = uiWriteQueue.catch(() => {}).then(() => chrome.storage.session.set({ [UI_METADATA_KEY]: value }));
+    await uiWriteQueue;
+  } catch (error) { console.warn("[GMR][SW] UI metadata unavailable", error); }
+}
+
+async function getUiState(sender) {
+  await restoreCaptureState();
+  const state = await uiSnapshot();
+  const frame = uiMetadata?.zoomFrame;
+  const sameFrame = !frame || (sender?.frameId === frame.frameId &&
+    (!frame.documentId || sender?.documentId === frame.documentId));
+  return { ok: true, ...state, isRecordingTab: sender?.tab?.id === state.tabId && sameFrame };
+}
+
+// Download completion affects the saved presentation only, not the save engine.
+async function refreshUiDownload(downloadId) {
+  try {
+    await loadUiMetadata();
+    if (uiMetadata?.saved?.downloadId !== downloadId) return;
+    const [download] = await chrome.downloads.search({ id: downloadId });
+    if (!download || uiMetadata?.saved?.downloadId !== downloadId) return;
+    await updateUiMetadata({ saved: {
+      ...uiMetadata.saved, downloadState: download.state,
+      filename: download.filename?.split(/[\\/]/).pop() || uiMetadata.saved.filename,
+      destination: download.filename?.replace(/[\\/][^\\/]+$/, "") || uiMetadata.saved.destination
+    } });
+    await publishUiState();
+  } catch (error) { console.warn("[GMR][SW] download UI metadata unavailable", error); }
+}
+chrome.downloads.onChanged.addListener((delta) => {
+  if (delta.state || delta.filename) void refreshUiDownload(delta.id);
+});
+
 let offscreenCreationPromise = null;
 
 async function ensureOffscreenDocument() {
@@ -125,12 +222,15 @@ async function handleStartRecording(sender, message) {
     // Recover only when Chrome proves the old Zoom document is gone.
     const recovered = await recoverZoomFrame(status);
     if (recovered?.ok === false) return recovered;
-    return await performStartRecording(sender, message);
+    const result = await performStartRecording(sender, message);
+    if (!result.ok) await updateUiMetadata({ error: { stage: result.stage, message: result.message } });
+    return result;
   })();
   try {
     return await startOperation;
   } finally {
     startOperation = null;
+    await publishUiState();
   }
 }
 
@@ -175,6 +275,8 @@ async function performStartRecording(sender, message) {
   try {
     const settings = await getRecordingSettings();
     console.log("[GMR][SW] recording settings:", settings);
+    await updateUiMetadata({ error: null });
+    void publishUiState();
     const capturedTabs = await chrome.tabCapture.getCapturedTabs();
     const existing = capturedTabs.find((item) =>
       item.tabId === tabId && (item.status === "active" || item.status === "pending")
@@ -225,7 +327,14 @@ async function performStartRecording(sender, message) {
         activeCaptureTabId = tabId;
         activeCaptureTabUrl = recordingUrl || null;
         console.log("[GMR][SW] capture state: starting -> capturing");
-        return { ok: true, stage: "recording", state: "capturing", message: "Recording started" };
+        const startedAt = Date.now();
+        await updateUiMetadata({
+          tabId, saved: null, error: null,
+          zoomFrame: identity.platform === "zoom" ? { frameId: sender.frameId, documentId: sender.documentId } : null,
+          recording: { ...identity, settings, startedAt, stoppedAt: null,
+            folderName: settings.saveMode === "selected-folder" ? await readUiFolderName() : null }
+        });
+        return { ok: true, stage: "recording", state: "capturing", startedAt, message: "Recording started" };
       }
       if (response?.ok === true && response?.stage === "audio-mix-ready") {
         console.log("[GMR][SW] audio mix ready in offscreen");
@@ -382,6 +491,11 @@ async function stopAndSaveRecording(reason) {
     }
     const recordingTabUrl = activeCaptureTabUrl;
     captureState = "stopping";
+    await loadUiMetadata().catch(() => {});
+    if (uiMetadata?.recording && !uiMetadata.recording.stoppedAt) {
+      await updateUiMetadata({ recording: { ...uiMetadata.recording, stoppedAt: Date.now() } });
+    }
+    void publishUiState();
     console.log("[GMR][SW] capture state: capturing -> stopping");
     console.log("[GMR][SW] stopping recording, reason:", reason);
     let stage = "stop-capture";
@@ -417,6 +531,7 @@ async function stopAndSaveRecording(reason) {
       const saveMode = normalizeSettings(response.settings).saveMode;
       console.log("[GMR][SW] save mode:", saveMode);
       let folderSaved = false;
+      let uiDownloadId = null;
       if (saveMode === "selected-folder") {
         console.log("[GMR][SW] sending recording to selected folder");
         try {
@@ -439,6 +554,7 @@ async function stopAndSaveRecording(reason) {
           url: response.blobUrl, filename, saveAs: saveMode !== "downloads"
         });
         if (!Number.isInteger(downloadId)) throw new Error("Download did not return an ID");
+        uiDownloadId = downloadId;
         console.log("[GMR][SW] download started");
         console.log("[GMR][SW] download id:", downloadId);
       }
@@ -455,11 +571,21 @@ async function stopAndSaveRecording(reason) {
       activeCaptureTabUrl = null;
       console.log("[GMR][SW] capture state: stopping -> idle");
       console.log("[GMR][SW] active capture tab cleared");
+      const recording = uiMetadata?.recording;
+      await updateUiMetadata({ error: null, recording: null, saved: {
+        filename, size: response.blobSize, settings: normalizeSettings(response.settings),
+        durationMs: recording?.startedAt ? Math.max(0, (recording.stoppedAt || Date.now()) - recording.startedAt) : null,
+        folderName: folderSaved ? await readUiFolderName() : null,
+        destination: folderSaved ? "selected-folder" : saveMode === "downloads" ? "downloads" : "chosen-file",
+        downloadId: uiDownloadId, downloadState: folderSaved ? "complete" : "in_progress"
+      } });
+      if (uiDownloadId !== null) await refreshUiDownload(uiDownloadId);
       return { ok: true, stage: "recording-saved", state: "idle", message: "Recording saved" };
     } catch (error) {
       console.error(stage === "download" ? "[GMR][SW] download failed" : "[GMR][SW] STOP_CAPTURE failed:", error);
       // Offscreen retains the Blob URL after download failure for a manual retry.
       captureState = "capturing";
+      await updateUiMetadata({ error: { stage, message: String(error) } });
       return { ok: false, stage, state: captureState, message: error instanceof Error ? error.message : String(error) };
     }
   })();
@@ -467,6 +593,7 @@ async function stopAndSaveRecording(reason) {
     return await stopOperation;
   } finally {
     stopOperation = null;
+    await publishUiState();
   }
 }
 
@@ -625,6 +752,19 @@ function respondSafely(sendResponse, response) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
+    if (message?.type === "UI_STATE_UPDATED") return false;
+    if (message?.type === "GET_UI_STATE") {
+      getUiState(sender).then((state) => respondSafely(sendResponse, state))
+        .catch((error) => respondSafely(sendResponse, { ok: false, message: String(error) }));
+      return true;
+    }
+    if (message?.type === "CLEAR_UI_SAVED") {
+      updateUiMetadata({ saved: null, error: null }).then(async () => {
+        await publishUiState();
+        respondSafely(sendResponse, { ok: true });
+      });
+      return true;
+    }
     if (message?.type === "SAVE_TO_SELECTED_FOLDER" || message?.type === "PREPARE_CAPTURE" || message?.type === "STOP_CAPTURE" || message?.type === "REVOKE_BLOB_URL" || message?.type === "GET_CAPTURE_STATUS") return false;
     if (message?.type === "ZOOM_MEETING_FRAME_LEFT") {
       handleZoomFrameLeft(sender)

@@ -265,9 +265,10 @@
     document.getElementById("gmr-permission-hint")?.remove();
   }
 
-  function requestStartRecording(button) {
+  function requestStartRecording(button, onComplete = () => {}) {
     if (startRequestPending) {
       console.warn("[GMR][CONTENT] start request already pending");
+      onComplete({ ok: false, message: "Запись уже запускается" });
       return;
     }
     window.clearTimeout(buttonResetTimer);
@@ -336,7 +337,7 @@
           }
           if (response?.ok === true && response.stage === "recording" && response.state === "capturing") {
             captureState = "capturing";
-            recordingStartedAt = Date.now();
+            recordingStartedAt = response.startedAt || Date.now();
             recordingElapsedMs = 0;
             renderRecordButtonState("capturing");
             startRecordingTimer();
@@ -352,6 +353,7 @@
         } catch (error) {
           console.error("[GMR][CONTENT] sendMessage failed:", error);
         } finally {
+          onComplete(response || { ok: false, message: "Нет ответа от расширения" });
           if (requestUiVersion === meetingUiVersion && !waitingForExtensionInvocation && captureState !== "capturing") {
             resetRecordingUi();
           }
@@ -361,6 +363,27 @@
       startRequestPending = false;
       resetRecordingUi();
       console.error("[GMR][CONTENT] sendMessage failed:", error);
+      onComplete({ ok: false, message: String(error) });
+    }
+  }
+
+  function syncRecordingUi(state) {
+    if (state?.isRecordingTab === false || startRequestPending || stopRequestPending) return;
+    if (!document.getElementById("gmr-record-button")) return;
+    captureState = state.captureState;
+    if (captureState === "capturing") {
+      window.clearTimeout(buttonResetTimer);
+      buttonResetTimer = null;
+      recordingStartedAt = state.recording?.startedAt ?? null;
+      renderRecordButtonState("capturing");
+      if (recordingStartedAt !== null && !state.recording?.stoppedAt) startRecordingTimer();
+      else stopRecordingTimer();
+    } else if (captureState === "stopping" || captureState === "starting") {
+      stopRecordingTimer();
+      renderRecordButtonState(captureState);
+    } else {
+      captureState = "idle";
+      resetRecordingUi();
     }
   }
 
@@ -404,6 +427,9 @@
     document.body.appendChild(button);
     renderRecordButtonState(recordButtonState);
     console.log("[GMR][CONTENT] record button created");
+    chrome.runtime.sendMessage({ type: "GET_UI_STATE" }, (state) => {
+      if (!chrome.runtime.lastError && state?.ok) syncRecordingUi(state);
+    });
   }
 
   function removeRecordButton() {
@@ -549,6 +575,19 @@
       }
 
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message?.type === "UI_STATE_UPDATED") {
+          syncRecordingUi(message.state);
+          return false;
+        }
+        if (message?.type === "UI_START_RECORDING") {
+          const button = document.getElementById("gmr-record-button");
+          // Only the active meeting frame answers; Zoom top/prejoin frames do not.
+          if (!button || !platform.isInsideMeeting()) return false;
+          requestStartRecording(button, (response) => {
+            try { sendResponse(response); } catch { /* Popup may have closed. */ }
+          });
+          return true;
+        }
         if (message?.type !== "EXTENSION_INVOKED") return false;
         try {
           console.log("[GMR][CONTENT] extension invocation received");

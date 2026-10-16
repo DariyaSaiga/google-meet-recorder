@@ -2,11 +2,21 @@
 
 console.log("[GMR][POPUP] settings page loaded");
 
+async function getUiMeetingTab() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // A permission tab may return here. Keep its original invoked meeting target.
+  const source = new URL(location.href).searchParams.get("meetingTabId");
+  if (source && /^\d+$/.test(source) && active?.url?.startsWith(chrome.runtime.getURL(""))) {
+    return chrome.tabs.get(Number(source));
+  }
+  return active;
+}
+
 async function notifyExtensionInvocation() {
   console.log("[GMR][POPUP] extension popup opened");
   let tab;
   try {
-    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tab = await getUiMeetingTab();
   } catch {
     console.warn("[GMR][POPUP] active tab unavailable");
     return;
@@ -26,10 +36,11 @@ async function notifyExtensionInvocation() {
   } catch {
     console.warn("[GMR][POPUP] content script not available on active tab");
   }
+  return tab.id;
 }
 
 // Keep the invocation handoff independent of settings initialization.
-notifyExtensionInvocation();
+const invocationReady = notifyExtensionInvocation();
 
 const DEFAULT_SETTINGS = {
   recordingMode: "audio",
@@ -120,7 +131,7 @@ async function refreshFolderStatus() {
     return;
   }
   if (await verifyDirectoryPermission(selectedDirectoryHandle)) {
-    folderStatus.textContent = `Выбрана папка: ${selectedDirectoryHandle.name}`;
+    folderStatus.textContent = selectedDirectoryHandle.name;
   } else {
     folderStatus.textContent = "Нужно снова разрешить доступ к выбранной папке";
     restoreFolderButton.hidden = false;
@@ -157,7 +168,7 @@ restoreFolderButton.addEventListener("click", async () => {
   try {
     const granted = await verifyDirectoryPermission(selectedDirectoryHandle, true);
     folderStatus.textContent = granted
-      ? `Выбрана папка: ${selectedDirectoryHandle.name}`
+      ? selectedDirectoryHandle.name
       : "Нужно снова разрешить доступ к выбранной папке";
     restoreFolderButton.hidden = granted;
   } catch (error) {
@@ -294,8 +305,10 @@ enableButton.addEventListener("click", async () => {
 
   try {
     console.log("[GMR][POPUP] opening microphone permission page");
-    const url = chrome.runtime.getURL("request-mic.html");
-    await chrome.tabs.create({ url });
+    const url = new URL(chrome.runtime.getURL("request-mic.html"));
+    const meetingTabId = (await getUiMeetingTab())?.id;
+    if (Number.isInteger(meetingTabId)) url.searchParams.set("meetingTabId", meetingTabId);
+    await chrome.tabs.create({ url: url.href });
     console.log("[GMR][POPUP] microphone permission page opened");
     microphoneStatus.textContent = "Продолжите на вкладке доступа к микрофону.";
   } catch (error) {
@@ -313,6 +326,8 @@ async function checkMicrophonePermission() {
     console.log("[GMR][POPUP] microphone permission state:", permission.state);
     // A delayed initial query must not overwrite the user's request result.
     if (userRequestStarted) return;
+    microphonePermission = permission.state;
+    permission.onchange = () => { microphonePermission = permission.state; renderUiState(); };
     if (permission.state === "granted") {
       microphoneStatus.textContent = "Доступ к микрофону разрешён";
       enableButton.textContent = "Микрофон готов";
@@ -323,7 +338,243 @@ async function checkMicrophonePermission() {
     }
   } catch {
     console.warn("[GMR][POPUP] microphone permission query unavailable");
+    microphonePermission = "unknown";
   }
 }
 
-checkMicrophonePermission();
+let microphonePermission = "unknown";
+checkMicrophonePermission().then(() => renderUiState());
+
+// Presentation only: settings still save through the existing change handlers.
+function updateSettingsSummary() {
+  const saveMode = settingsForm.querySelector('input[name="saveMode"]:checked')?.value;
+  document.getElementById("save-summary-title").textContent = {
+    downloads: "Загрузки", ask: "Выбирать каждый раз", "selected-folder": "Папка на устройстве"
+  }[saveMode] || "Загрузки";
+  document.getElementById("save-summary-detail").textContent = saveMode === "selected-folder"
+    ? (selectedDirectoryHandle?.name || "Папка ещё не выбрана")
+    : saveMode === "ask" ? "Имя и папка — при сохранении" : "Автоматически после остановки";
+  const permissionText = document.getElementById("microphone-status").textContent;
+  const granted = permissionText === "Доступ к микрофону разрешён";
+  document.getElementById("mic-setting-summary").textContent = !microphoneToggle.checked
+    ? "Выключен — только звук вкладки"
+    : granted ? "Готов — ваш голос будет в записи" : permissionText;
+  document.querySelector(".permission").hidden = !microphoneToggle.checked || granted;
+}
+
+// The worker is the authority for recording; this variable only selects a settings view.
+let settingsViewOpen = false;
+let workerUiState = null;
+let uiBusy = false;
+let renderedScreen = null;
+let popupTimer = null;
+let uiRequestVersion = 0;
+const liveUi = document.getElementById("live-ui");
+const uiError = document.getElementById("ui-error");
+const appShell = document.querySelector(".app-shell");
+const mainActions = document.querySelector(".app-shell > .action-area");
+
+function showUiError(message) {
+  uiError.textContent = message || "";
+  uiError.hidden = !message;
+}
+
+function showSaveSettings(show) {
+  settingsViewOpen = show;
+  renderUiState();
+  if (show) document.getElementById("save-title").focus({ preventScroll: true });
+}
+
+function formatUiDuration(ms) {
+  const seconds = Math.floor(Math.max(0, ms) / 1000);
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+function destinationLabel(data) {
+  if (data?.destination && !["downloads", "selected-folder", "chosen-file"].includes(data.destination)) return data.destination;
+  if (data?.destination === "downloads") return "Загрузки";
+  if (data?.destination === "chosen-file") return "Выбранный файл";
+  const mode = data?.settings?.saveMode;
+  return mode === "selected-folder" ? data?.folderName || "Выбранная папка"
+    : mode === "ask" ? "Выбирать каждый раз" : "Загрузки";
+}
+
+function updatePopupTimer() {
+  const timer = liveUi.querySelector(".large-timer");
+  const recording = workerUiState?.recording;
+  if (!timer) return;
+  timer.hidden = !Number.isFinite(recording?.startedAt);
+  if (!timer.hidden) timer.textContent = formatUiDuration((recording.stoppedAt || Date.now()) - recording.startedAt);
+}
+
+function renderUiState() {
+  const state = workerUiState;
+  const active = state && state.captureState !== "idle";
+  const saved = state?.saved;
+  const needsPermission = microphoneToggle.checked && microphonePermission !== "granted";
+  const screen = active ? "active" : saved ? "saved" : settingsViewOpen ? "save" : needsPermission ? "permission" : "new";
+  appShell.dataset.screen = screen;
+  settingsForm.hidden = !["new", "save"].includes(screen);
+  mainActions.hidden = settingsForm.hidden;
+  document.getElementById("new-recording").hidden = screen !== "new";
+  document.getElementById("save-settings").hidden = screen !== "save";
+  document.getElementById("new-actions").hidden = screen !== "new";
+  document.getElementById("save-actions").hidden = screen !== "save";
+  const showBack = screen === "save" || screen === "saved";
+  document.getElementById("back-arrow").hidden = !showBack;
+  document.getElementById("back-arrow").disabled = uiBusy;
+  document.getElementById("back-arrow").setAttribute("aria-label", screen === "saved" ? "На главную" : "Назад к записи");
+  document.getElementById("back-to-recording").hidden = !showBack;
+  document.getElementById("back-to-recording").disabled = uiBusy;
+  document.getElementById("back-to-recording").textContent = screen === "saved" ? "На главную" : "Назад к записи";
+  liveUi.hidden = !settingsForm.hidden;
+  if (renderedScreen !== screen) {
+    clearInterval(popupTimer);
+    popupTimer = null;
+    liveUi.replaceChildren();
+    const template = screen === "permission" ? "permission-template"
+      : ["active", "saved"].includes(screen) ? `recording-${screen}-template` : null;
+    if (template) liveUi.append(document.getElementById(template).content.cloneNode(true));
+    if (screen === "active") popupTimer = setInterval(updatePopupTimer, 250);
+    renderedScreen = screen;
+    document.body.scrollTop = 0;
+    document.documentElement.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }
+  document.getElementById("start-recording").disabled = !state || uiBusy || settingsControls.disabled;
+  document.getElementById("save-settings-done").disabled = uiBusy || settingsControls.disabled;
+  if (screen === "active") {
+    const recording = state.recording;
+    const label = liveUi.querySelector(".recording-label");
+    const pending = recording?.stoppedAt;
+    label.lastChild.textContent = state.captureState === "starting" ? "Запуск записи…"
+      : state.captureState === "stopping" ? "Сохранение…" : pending ? "Запись ожидает сохранения" : "Идёт запись";
+    const stop = document.getElementById("stop-recording");
+    stop.disabled = uiBusy || ["starting", "stopping"].includes(state.captureState);
+    stop.textContent = pending && state.captureState === "capturing" ? "Повторить сохранение" : "Остановить и сохранить";
+    const values = {
+      "[data-recording-mode]": recording?.settings ? `Вкладка браузера · ${recording.settings.recordingMode === "audio-video" ? "Аудио + видео" : "Только аудио"}` : null,
+      "[data-recording-mic]": recording?.settings ? recording.settings.microphoneEnabled ? "Включён — записывает ваш голос" : "Выключен — только звук вкладки" : null,
+      "[data-recording-folder]": recording?.settings ? destinationLabel(recording) : null
+    };
+    for (const [selector, value] of Object.entries(values)) {
+      const element = liveUi.querySelector(selector);
+      element.textContent = value || "";
+      element.closest(".icon-row").hidden = !value;
+    }
+    updatePopupTimer();
+  }
+  if (screen === "saved") {
+    const complete = saved.downloadState === "complete";
+    liveUi.querySelector(".success-icon .icon").src = saved.downloadState === "interrupted"
+      ? "assets/ui/x.svg" : "assets/ui/check.svg";
+    liveUi.querySelector("h1").textContent = complete ? "Запись сохранена" : saved.downloadState === "interrupted" ? "Сохранение прервано" : "Файл сохраняется";
+    liveUi.querySelector(".subtitle").textContent = complete ? "Файл сохранён на этом устройстве." : "Проверьте загрузки браузера.";
+    liveUi.querySelector(".saved-file").hidden = !saved.filename;
+    liveUi.querySelector(".saved-filename").textContent = saved.filename || "";
+    const metadata = [saved.settings?.recordingMode === "audio-video" ? "Аудио + видео" : "Только аудио"];
+    if (Number.isFinite(saved.durationMs)) metadata.push(formatUiDuration(saved.durationMs));
+    if (Number.isFinite(saved.size)) metadata.push(`${(saved.size / 1024 / 1024).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`);
+    const meta = liveUi.querySelector(".saved-metadata");
+    meta.hidden = false; meta.textContent = metadata.join(" · ");
+    liveUi.querySelector(".saved-location").hidden = false;
+    liveUi.querySelector("[data-saved-folder]").textContent = destinationLabel(saved);
+  }
+  if (screen === "permission") {
+    document.getElementById("popup-allow-microphone").disabled = uiBusy;
+    document.getElementById("popup-without-mic").disabled = uiBusy || settingsControls.disabled;
+  }
+  updateSettingsSummary();
+}
+
+async function refreshUiState() {
+  const version = ++uiRequestVersion;
+  try {
+    const state = await chrome.runtime.sendMessage({ type: "GET_UI_STATE" });
+    if (version !== uiRequestVersion) return;
+    if (!state?.ok) throw new Error(state?.message || "Состояние записи недоступно");
+    workerUiState = state;
+    renderUiState();
+  } catch (error) { showUiError(error.message); }
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "UI_STATE_UPDATED") return false;
+  ++uiRequestVersion;
+  workerUiState = message.state;
+  if (message.state.error) showUiError(message.state.error.message);
+  renderUiState();
+  return false;
+});
+
+async function runUiAction(action) {
+  if (uiBusy) return;
+  uiBusy = true; showUiError(""); renderUiState();
+  try { await action(); }
+  catch (error) { showUiError(error.message || String(error)); }
+  finally { uiBusy = false; await refreshUiState(); renderUiState(); }
+}
+
+document.getElementById("start-recording").addEventListener("click", () => runUiAction(async () => {
+  await saveQueue;
+  await invocationReady;
+  const tab = await getUiMeetingTab();
+  if (!Number.isInteger(tab?.id)) throw new Error("Откройте вкладку активной встречи.");
+  let result;
+  try { result = await chrome.tabs.sendMessage(tab.id, { type: "UI_START_RECORDING" }); }
+  catch { throw new Error("Откройте активную встречу Meet, Teams или Zoom и обновите её вкладку."); }
+  if (!result?.ok) throw new Error(result?.message || "Активная встреча не найдена.");
+}));
+
+liveUi.addEventListener("click", (event) => {
+  const id = event.target.closest("button")?.id;
+  if (id === "stop-recording") void runUiAction(async () => {
+    const result = await chrome.runtime.sendMessage({ type: "STOP_RECORDING" });
+    if (!result?.ok) throw new Error(result?.message || "Не удалось сохранить запись");
+  });
+  if (id === "new-recording-action") returnToMain();
+  if (id === "popup-allow-microphone") enableButton.click();
+  if (id === "popup-without-mic") void runUiAction(async () => {
+    renderSettings(await saveSettings({ microphoneEnabled: false }));
+    settingsViewOpen = false;
+  });
+});
+
+document.getElementById("edit-save-settings").addEventListener("click", () => showSaveSettings(true));
+function returnToMain() {
+  if (!workerUiState?.saved) { showSaveSettings(false); return; }
+  void runUiAction(async () => {
+    const result = await chrome.runtime.sendMessage({ type: "CLEAR_UI_SAVED" });
+    if (!result?.ok) throw new Error(result?.message || "Не удалось вернуться на главную");
+    settingsViewOpen = false;
+  });
+}
+document.getElementById("back-to-recording").addEventListener("click", returnToMain);
+document.getElementById("back-arrow").addEventListener("click", returnToMain);
+document.getElementById("save-settings-done").addEventListener("click", () => runUiAction(async () => {
+  const settings = normalizeSettings(Object.fromEntries(new FormData(settingsForm)));
+  settings.microphoneEnabled = microphoneToggle.checked;
+  renderSettings(await saveSettings(settings));
+  settingsViewOpen = false;
+}));
+new MutationObserver(renderUiState).observe(settingsControls, { attributes: true, attributeFilter: ["disabled"] });
+new MutationObserver(updateSettingsSummary).observe(microphoneStatus, { childList: true });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.gmrSettings) {
+    renderSettings(normalizeSettings(changes.gmrSettings.newValue));
+    renderUiState();
+  }
+});
+window.addEventListener("focus", () => {
+  userRequestStarted = false;
+  void checkMicrophonePermission().then(() => renderUiState());
+  void refreshUiState();
+});
+void refreshUiState();
+
+liveUi.addEventListener("change", (event) => {
+  if (event.target.id === "popup-permission-toggle" && !event.target.checked) {
+    document.getElementById("popup-without-mic").click();
+  }
+});
