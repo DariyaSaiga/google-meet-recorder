@@ -41,7 +41,7 @@ test("a saved Recording ends with its Transcript and Summary saved next to it", 
   browser.meetingAudio.add("rec-1");
 
   const jobId = await recordAndUpload(ctx);
-  assert.equal(browser.uploadRequests[0].filename, "Meet_abc-defg-hij_2026-10-15_18-30.webm");
+  assert.equal(browser.uploadRequests[0].filename, "Meet_abc-defg-hij_2026-10-15_18-30.wav", "ShaiNote accepts WAV, not WebM");
   assert.deepEqual(shainote.server.jobs.get(jobId), {
     status: "queued",
     title: "Google Meet abc-defg-hij · 2026-10-15 18:30",

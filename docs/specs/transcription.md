@@ -90,7 +90,7 @@ The local Recording is always saved first and never depends on ShaiNote. Chrome 
 - **Where the work happens**:
   - The upload runs in the offscreen document. That document holds the Blob and isn't subject to the service worker's 30-second idle limit on long fetches. It's a fire-and-forget request, and the offscreen document reports `UPLOAD_RESULT` back via a runtime message.
   - Meeting Audio is kept in a dedicated IndexedDB database, keyed by the local id, until ShaiNote accepts it or the record is removed.
-- **Meeting Audio capture**: In Audio + video mode with Transcription enabled, a second audio-only `MediaRecorder` records the mixed audio track in parallel. In Audio mode the Recording Blob is the Meeting Audio. The Transcription setting is snapshotted at Recording start, like the other settings.
+- **Meeting Audio capture**: With Transcription enabled, the mixed meeting audio (tab + microphone) is also captured, in both Recording Modes, as a 16 kHz mono 16-bit WAV. An AudioWorklet runs in a 16 kHz AudioContext, so Chrome does the resampling. ShaiNote accepts MP3, WAV, OGG, M4A and MP4 (up to 500 MB) but not WebM, and of those Chrome can only produce WAV everywhere. That is about 1.9 MB per minute, so the 500 MB limit is about 4 hours. The Transcription setting is snapshotted at Recording start, like the other settings.
 - **Short Recordings**: Recordings under 30 s create a `too-short` record and are not uploaded.
 - **Polling**: A `chrome.alarms` tick every 30 s drives:
   - status polling;

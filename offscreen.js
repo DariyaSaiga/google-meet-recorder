@@ -22,10 +22,10 @@ let pendingRecording = null;
 let recordingTabId = null;
 let recordingTabUrl = null;
 let recordingFrame = null;
-// Audio + video Recordings with Transcription also record the mixed audio alone.
-let meetingAudioRecorder = null;
-let meetingAudioChunks = [];
-let meetingAudioStopped = null;
+// With Transcription on, the meeting mix is also captured as 16 kHz mono PCM:
+// ShaiNote takes WAV (not WebM), and 16 kHz is plenty for speech.
+const MEETING_AUDIO_SAMPLE_RATE = 16000;
+let meetingAudioCapture = null;
 const uploadsInFlight = new Set();
 
 function createMediaRecorder(settings) {
@@ -63,47 +63,77 @@ function createMediaRecorder(settings) {
   });
 }
 
-function startMeetingAudioRecorder() {
-  const mimeType = ["audio/webm;codecs=opus", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
-  const stream = new MediaStream(mixedStream.getAudioTracks());
-  const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-  const chunks = [];
-  recorder.addEventListener("dataavailable", (event) => {
-    if (event.data && event.data.size > 0) chunks.push(event.data);
-  });
-  meetingAudioStopped = new Promise((resolve) => {
-    recorder.addEventListener("stop", resolve, { once: true });
-  });
-  recorder.start(1000);
-  meetingAudioRecorder = recorder;
-  meetingAudioChunks = chunks;
-  console.log("[GMR][OFFSCREEN] Meeting Audio recorder started:", recorder.mimeType);
+async function startMeetingAudioCapture() {
+  // Chrome resamples the mix into this 16 kHz context.
+  const context = new AudioContext({ sampleRate: MEETING_AUDIO_SAMPLE_RATE });
+  try {
+    if (context.state === "suspended") await context.resume();
+    await context.audioWorklet.addModule("meeting-audio-worklet.js");
+    const source = context.createMediaStreamSource(new MediaStream(mixedStream.getAudioTracks()));
+    // No outputs: the node is pulled on its own and never reaches the speakers.
+    const node = new AudioWorkletNode(context, "meeting-audio-capture", { numberOfOutputs: 0 });
+    const capture = { context, source, node, chunks: [], onDone: null };
+    node.port.onmessage = (event) => {
+      if (event.data.chunk) capture.chunks.push(event.data.chunk);
+      if (event.data.done) capture.onDone?.();
+    };
+    source.connect(node);
+    meetingAudioCapture = capture;
+    console.log("[GMR][OFFSCREEN] Meeting Audio capture started:", context.sampleRate, "Hz");
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
 }
 
-async function stopMeetingAudioRecorder() {
-  const recorder = meetingAudioRecorder;
-  if (!recorder) return null;
-  if (recorder.state !== "inactive") recorder.stop();
-  await meetingAudioStopped;
-  const blob = new Blob(meetingAudioChunks, { type: recorder.mimeType || "audio/webm" });
-  meetingAudioRecorder = null;
-  meetingAudioChunks = [];
-  meetingAudioStopped = null;
-  return blob.size > 0 ? blob : null;
+async function stopMeetingAudioCapture() {
+  const capture = meetingAudioCapture;
+  if (!capture) return null;
+  meetingAudioCapture = null;
+  // Collect the samples still buffered in the worklet, but never hang the stop on it.
+  await Promise.race([
+    new Promise((resolve) => {
+      capture.onDone = resolve;
+      capture.node.port.postMessage("flush");
+    }),
+    new Promise((resolve) => setTimeout(resolve, 2000))
+  ]);
+  capture.source.disconnect();
+  await capture.context.close().catch(() => {});
+  return encodeWav(capture.chunks, capture.context.sampleRate);
+}
+
+function encodeWav(chunks, sampleRate) {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (sampleCount === 0) return null;
+  const header = new DataView(new ArrayBuffer(44));
+  const text = (offset, value) => [...value].forEach((char, index) => header.setUint8(offset + index, char.charCodeAt(0)));
+  text(0, "RIFF");
+  header.setUint32(4, 36 + sampleCount * 2, true);
+  text(8, "WAVE");
+  text(12, "fmt ");
+  header.setUint32(16, 16, true); // PCM chunk size
+  header.setUint16(20, 1, true); // PCM
+  header.setUint16(22, 1, true); // mono
+  header.setUint32(24, sampleRate, true);
+  header.setUint32(28, sampleRate * 2, true); // byte rate
+  header.setUint16(32, 2, true); // block align
+  header.setUint16(34, 16, true); // bits per sample
+  text(36, "data");
+  header.setUint32(40, sampleCount * 2, true);
+  // Typed arrays are little-endian on every platform Chrome runs on, as WAV expects.
+  return new Blob([header, ...chunks], { type: "audio/wav" });
 }
 
 // Hands the Meeting Audio to the worker through IndexedDB; Transcription
 // decides whether it is worth sending.
-async function keepMeetingAudio(recordingBlob, startedAt) {
+async function keepMeetingAudio(startedAt) {
   const durationMs = startedAt === null ? 0 : Date.now() - startedAt;
-  let meetingAudio = recordingBlob;
-  if (recordingSettings.recordingMode === "audio-video") {
-    try {
-      meetingAudio = await stopMeetingAudioRecorder();
-    } catch (error) {
-      console.error("[GMR][OFFSCREEN] Meeting Audio recorder stop failed:", error);
-      meetingAudio = null;
-    }
+  let meetingAudio = null;
+  try {
+    meetingAudio = await stopMeetingAudioCapture();
+  } catch (error) {
+    console.error("[GMR][OFFSCREEN] Meeting Audio capture stop failed:", error);
   }
   const localId = crypto.randomUUID();
   let stored = false;
@@ -162,7 +192,7 @@ async function finishRecording() {
       stage = "recording-blob";
       if (!blob) throw new Error("No recording available to save");
       const transcription = recordingSettings.transcriptionEnabled
-        ? await keepMeetingAudio(blob, startedAt) : null;
+        ? await keepMeetingAudio(startedAt) : null;
       const blobUrl = URL.createObjectURL(blob);
       console.log("[GMR][OFFSCREEN] Blob URL created for download");
       pendingRecording = {
@@ -186,7 +216,7 @@ async function finishRecording() {
     console.error("[GMR][OFFSCREEN] recording stop failure stage:", stage);
     let state = "capturing";
     try {
-      await stopMeetingAudioRecorder().catch(() => {});
+      await stopMeetingAudioCapture().catch(() => {});
       await cleanupAudioResources();
       if (!pendingRecording) state = "idle";
       mediaRecorder = null;
@@ -524,13 +554,12 @@ async function prepareCapture(streamId, suppliedSettings = {}) {
     console.log("[GMR][OFFSCREEN] starting MediaRecorder");
     mediaRecorder.start(1000);
     recordingStartedAt = Date.now();
-    if (settings.transcriptionEnabled && settings.recordingMode === "audio-video") {
+    if (settings.transcriptionEnabled) {
       try {
-        startMeetingAudioRecorder();
+        await startMeetingAudioCapture();
       } catch (error) {
         // The Recording matters more than its Transcription: keep recording without it.
-        console.error("[GMR][OFFSCREEN] Meeting Audio recorder failed to start:", error);
-        meetingAudioRecorder = null;
+        console.error("[GMR][OFFSCREEN] Meeting Audio capture failed to start:", error);
       }
     }
     console.log("[GMR][OFFSCREEN] MediaRecorder started");

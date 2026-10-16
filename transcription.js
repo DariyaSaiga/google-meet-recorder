@@ -195,7 +195,7 @@
       }
       await deps.requestUpload({
         localId: record.localId,
-        filename: `${record.recordingName}.webm`,
+        filename: `${record.recordingName}.wav`,
         url: `${API_BASE}/meetings/upload`,
         accessToken
       });
