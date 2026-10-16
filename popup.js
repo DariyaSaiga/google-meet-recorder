@@ -356,7 +356,7 @@ function renderTranscriptionSetting() {
   accountView.hidden = !signedIn;
   accountEmail.textContent = signedIn ? shainoteAccount.email : "";
   transcriptionHint.textContent = currentSettings.transcriptionEnabled && !currentSettings.microphoneEnabled
-    ? "Микрофон выключен: вашего голоса не будет в расшифровке." : "";
+    ? "Микрофон выключен: вашего голоса не будет в транскрипции." : "";
 }
 
 function sendTranscriptionMessage(message) {

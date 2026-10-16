@@ -111,7 +111,7 @@ The local Recording is always saved first and never depends on ShaiNote. Chrome 
 - **Auth failures**: A 401 triggers one refresh followed by one retry. If the refresh fails, the extension signs out locally; the affected upload becomes `upload-failed` with "sign in again".
 - **Popup**:
   - Signed out: only a sign-in screen (email, password, links to register and reset password), in the existing card style. The settings are shown once signed in.
-  - One "Расшифровка" card with the Transcription toggle, in the same style as the Microphone card.
+  - One "Транскрипция" card with the Transcription toggle, in the same style as the Microphone card.
   - Microphone hint, shown only when Transcription is on and the microphone is off.
   - No Transcriptions list: progress and results come only as Chrome notifications.
 - **Meeting title on ShaiNote**: `<Platform name> <meeting id> · YYYY-MM-DD HH:MM`. The meeting URL is the origin plus path only. Failing to set the title or URL is not fatal.

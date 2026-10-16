@@ -271,12 +271,12 @@
         if (response.ok) {
           const filename = await saveDocument(record, "transcript", response);
           record.transcript = "saved";
-          await notify("Расшифровка готова", `${record.title}: ${filename}`);
+          await notify("Транскрипция готова", `${record.title}: ${filename}`);
         } else {
           record.transcriptAttempts = (record.transcriptAttempts || 0) + 1;
           if (record.transcriptAttempts >= MAX_TRANSCRIPT_ATTEMPTS) {
             record.transcript = "failed";
-            await notify("Расшифровка недоступна", `${record.title}: откройте встречу на shainote.ai`);
+            await notify("Транскрипция недоступна", `${record.title}: откройте встречу на shainote.ai`);
           }
         }
       }
@@ -309,7 +309,7 @@
         if (pdf.ok) {
           const filename = await saveDocument(record, "summary", pdf);
           record.summary = "saved";
-          await notify("Резюме готово", `${record.title}: ${filename}`);
+          await notify("Сводка готова", `${record.title}: ${filename}`);
           return;
         }
       }
@@ -320,7 +320,7 @@
 
     async function failSummary(record) {
       record.summary = "failed";
-      await notify("Резюме недоступно", `${record.title}: расшифровка сохранена, резюме не удалось получить`);
+      await notify("Сводка недоступна", `${record.title}: транскрипция сохранена, сводку не удалось получить`);
     }
 
     async function tick() {
@@ -338,7 +338,7 @@
           if (record.state !== "failed") record.error = null;
         } catch (error) {
           // Anything else is transient: the next tick tries again.
-          if (error instanceof SignedOutError) record.error = "Войдите в ShaiNote, чтобы получить расшифровку";
+          if (error instanceof SignedOutError) record.error = "Войдите в ShaiNote, чтобы получить транскрипцию";
           else console.warn("[GMR][TRANSCRIPTION] tick failed for", localId, error);
         }
         await updateRecord(localId, record);

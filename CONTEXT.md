@@ -36,12 +36,12 @@ ShaiNote's processing of one Meeting Audio, identified by a job id, from upload 
 _Avoid_: Task, request
 
 **Transcript**:
-The document ShaiNote returns for a completed Job, saved next to its Recording.
-_Avoid_: Transcription (that is the feature, not the document), text
+The document ShaiNote returns for a completed Job, saved next to its Recording. Called «Транскрипция» in the Russian UI.
+_Avoid_: Transcription (that is the feature, not the document), text, «Расшифровка»
 
 **Summary**:
-The document ShaiNote generates from a completed Job's transcript, also saved next to its Recording.
-_Avoid_: Notes, recap
+The document ShaiNote generates from a completed Job's transcript, also saved next to its Recording. Called «Сводка» in the Russian UI.
+_Avoid_: Notes, recap, «Резюме»
 
 **ShaiNote Account**:
 The user's ShaiNote login, which the extension signs into. Transcription requires one.

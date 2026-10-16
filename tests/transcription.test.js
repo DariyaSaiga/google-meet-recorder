@@ -62,7 +62,7 @@ test("a saved Recording ends with its Transcript and Summary saved next to it", 
     { filename: "Meet_abc-defg-hij_2026-10-15_18-30_transcript.pdf", text: `%PDF transcript ${jobId} pdf` },
     { filename: "Meet_abc-defg-hij_2026-10-15_18-30_summary.pdf", text: "%PDF summary s-auto pdf" }
   ]);
-  assert.deepEqual(browser.notifications.map((n) => n.title), ["Расшифровка готова", "Резюме готово"]);
+  assert.deepEqual(browser.notifications.map((n) => n.title), ["Транскрипция готова", "Сводка готова"]);
   const [record] = await transcription.list();
   assert.equal(record.transcript, "saved");
   assert.equal(record.summary, "saved");
@@ -282,7 +282,7 @@ test("a failed Summary keeps the Transcript and reports only the Summary as fail
   assert.equal(record.state, "completed");
   assert.equal(record.transcript, "saved");
   assert.equal(record.summary, "failed");
-  assert.equal(browser.notifications.at(-1).title, "Резюме недоступно");
+  assert.equal(browser.notifications.at(-1).title, "Сводка недоступна");
   assert.equal(await transcription.needsPolling(), false);
 });
 
@@ -404,7 +404,7 @@ test("a Transcript ShaiNote can't deliver is reported as failed after a few atte
   const [record] = await transcription.list();
   assert.equal(record.transcript, "failed");
   assert.equal(browser.downloads.some((d) => d.filename.endsWith("_transcript.pdf")), false);
-  assert.ok(browser.notifications.some((n) => n.title === "Расшифровка недоступна"));
+  assert.ok(browser.notifications.some((n) => n.title === "Транскрипция недоступна"));
 });
 
 test("failing to set the meeting title on ShaiNote doesn't stop the Job", async () => {
